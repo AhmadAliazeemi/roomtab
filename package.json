@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "deploy": "npm run build && firebase deploy --only hosting,firestore:rules",
     "test:security": "node scripts/test-deepmerge-security.cjs",
-    "test:accounting": "node --test scripts/accounting.test.mjs"
+    "test:accounting": "node --test scripts/accounting.test.mjs",
+    "test:rules": "node --test scripts/firestore-rules.test.mjs"
   },
   "dependencies": {
     "firebase": "^11.10.0",
@@ -24,7 +25,8 @@
     "typescript": "~5.8.3",
     "vite": "^6.3.5",
     "vite-plugin-pwa": "^0.21.1",
-    "deepmerge": "file:vendor/deepmerge"
+    "deepmerge": "file:vendor/deepmerge",
+    "@firebase/rules-unit-testing": "4.0.1"
   },
   "overrides": {
     "@grpc/grpc-js": "1.13.7",
