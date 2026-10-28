@@ -23,7 +23,7 @@ jobs:
           cache: npm
 
       - name: Use npm 11 for allowScripts support
-        run: npm install --global npm@11.15.0
+        run: npm install --global npm@11.21.1
 
       - name: Regenerate lockfile for the reviewed glob override
         run: npm install --package-lock-only --ignore-scripts
