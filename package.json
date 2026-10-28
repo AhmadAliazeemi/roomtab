@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && firebase deploy --only hosting,firestore:rules",
-    "test:security": "node scripts/test-deepmerge-security.cjs"
+    "test:security": "node scripts/test-deepmerge-security.cjs",
+    "test:accounting": "node --test scripts/accounting.test.mjs"
   },
   "dependencies": {
     "firebase": "^11.10.0",
