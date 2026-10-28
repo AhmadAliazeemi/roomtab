@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function memberPath(roomId, userId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/members/$(userId);
+    }
+    function isRoomMember(roomId) {
+      return signedIn() && exists(memberPath(roomId, request.auth.uid))
+        && get(memberPath(roomId, request.auth.uid)).data.is_active == true;
+    }
+    function isRoomAdmin(roomId) {
+      return isRoomMember(roomId)
+        && get(memberPath(roomId, request.auth.uid)).data.role == 'admin';
+    }
+    function monthIsOpen(roomId, monthKey) {
+      let closePath = /databases/$(database)/documents/rooms/$(roomId)/closings/$(monthKey);
+      return !exists(closePath) || get(closePath).data.reopened_at != null;
+    }
+    function inviteAllows(code, roomId) {
+      let invitePath = /databases/$(database)/documents/inviteCodes/$(code);
+      return code is string && exists(invitePath)
+        && get(invitePath).data.room_id == roomId
+        && get(invitePath).data.active == true;
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+
+      match /rooms/{roomId} {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow create: if signedIn() && request.auth.uid == userId
+          && getAfter(memberPath(roomId, userId)).data.is_active == true;
+        allow update: if signedIn() && (
+          request.auth.uid == userId ||
+          (isRoomAdmin(roomId) && request.resource.data.is_active == false)
+        );
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
+    }
+
+    match /inviteCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.active == true
+        && request.resource.data.created_by == request.auth.uid
+        && getAfter(/databases/$(database)/documents/rooms/$(request.resource.data.room_id)).data.admin_user_id == request.auth.uid;
+      allow update: if signedIn() && isRoomAdmin(resource.data.room_id)
+        && request.resource.data.room_id == resource.data.room_id
+        && request.resource.data.created_by == resource.data.created_by;
+      allow delete: if false;
+    }
+
+    match /rooms/{roomId} {
+      allow create: if signedIn() && request.resource.data.admin_user_id == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2;
+      allow get, list: if isRoomMember(roomId);
+      allow update: if isRoomAdmin(roomId)
+        && request.resource.data.admin_user_id == resource.data.admin_user_id;
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow read: if isRoomMember(roomId) || (signedIn() && request.auth.uid == memberId);
+        allow create: if signedIn() && request.auth.uid == memberId && (
+          (getAfter(/databases/$(database)/documents/rooms/$(roomId)).data.admin_user_id == request.auth.uid
+            && request.resource.data.role == 'admin') ||
+          (request.resource.data.role == 'member'
+            && inviteAllows(request.resource.data.join_code, roomId))
+        ) && request.resource.data.user_id == memberId
+          && request.resource.data.is_active == true;
+        allow update: if (
+          (signedIn() && request.auth.uid == memberId && isRoomMember(roomId)
+            && request.resource.data.user_id == resource.data.user_id
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.is_active == resource.data.is_active
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['display_name']))
+          || (isRoomAdmin(roomId)
+            && request.resource.data.user_id == resource.data.user_id
+            && request.resource.data.is_active == false
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['is_active', 'left_at']))
+        );
+        allow delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if isRoomMember(roomId);
+        allow create: if isRoomMember(roomId)
+          && request.resource.data.room_id == roomId
+          && request.resource.data.created_by == request.auth.uid
+          && request.resource.data.total_amount is number
+          && request.resource.data.total_amount > 0
+          && request.resource.data.shares is list
+          && request.resource.data.shares.size() > 0
+          && monthIsOpen(roomId, request.resource.data.month_key);
+        allow update: if isRoomMember(roomId)
+          && (resource.data.created_by == request.auth.uid || isRoomAdmin(roomId))
+          && request.resource.data.room_id == resource.data.room_id
+          && request.resource.data.created_by == resource.data.created_by
+          && monthIsOpen(roomId, resource.data.month_key)
+          && monthIsOpen(roomId, request.resource.data.month_key);
+        allow delete: if false;
+      }
+
+      match /payments/{paymentId} {
+        allow read: if isRoomMember(roomId);
+        allow create: if isRoomMember(roomId)
+          && request.resource.data.room_id == roomId
+          && request.resource.data.recorded_by == request.auth.uid
+          && request.resource.data.amount is number && request.resource.data.amount > 0
+          && exists(memberPath(roomId, request.resource.data.paid_by))
+          && get(memberPath(roomId, request.resource.data.paid_by)).data.is_active == true
+          && monthIsOpen(roomId, request.resource.data.month_key);
+        allow update: if isRoomMember(roomId)
+          && (resource.data.recorded_by == request.auth.uid || isRoomAdmin(roomId))
+          && request.resource.data.room_id == resource.data.room_id
+          && request.resource.data.recorded_by == resource.data.recorded_by
+          && monthIsOpen(roomId, resource.data.month_key)
+          && monthIsOpen(roomId, request.resource.data.month_key);
+        allow delete: if false;
+      }
+
+      match /reimbursements/{reimbursementId} {
+        allow read: if isRoomMember(roomId);
+        allow create: if isRoomMember(roomId)
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.track_reimbursements == true
+          && request.resource.data.room_id == roomId
+          && request.resource.data.recorded_by == request.auth.uid
+          && request.resource.data.amount is number && request.resource.data.amount > 0
+          && exists(memberPath(roomId, request.resource.data.from_member))
+          && exists(memberPath(roomId, request.resource.data.to_member));
+        allow update: if isRoomMember(roomId)
+          && (resource.data.recorded_by == request.auth.uid || isRoomAdmin(roomId))
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.track_reimbursements == true
+          && request.resource.data.room_id == resource.data.room_id
+          && request.resource.data.recorded_by == resource.data.recorded_by;
+        allow delete: if false;
+      }
+
+      match /activity/{activityId} {
+        allow read: if isRoomMember(roomId);
+        allow create: if isRoomMember(roomId)
+          && request.resource.data.room_id == roomId
+          && request.resource.data.actor_id == request.auth.uid;
+        allow update, delete: if false;
+      }
+
+      match /closings/{monthKey} {
+        allow read: if isRoomMember(roomId);
+        allow create: if isRoomAdmin(roomId)
+          && request.resource.data.closed_by == request.auth.uid
+          && request.resource.data.month_start == monthKey
+          && request.resource.data.reopened_at == null;
+        allow update: if isRoomAdmin(roomId)
+          && request.resource.data.closed_by == resource.data.closed_by
+          && request.resource.data.closed_at == resource.data.closed_at
+          && request.resource.data.month_start == resource.data.month_start
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['reopened_at', 'reopen_reason', 'reopened_by']);
+        allow delete: if false;
+      }
+    }
+  }
+}

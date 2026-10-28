@@ -1,0 +1,42 @@
+ROOMTAB — START HERE (WINDOWS)
+================================
+
+This is your first working starter for RoomTab, a minimalist hostel canteen expense tracker.
+It is an installable website/PWA: once deployed, share its web link and each Android user can add it to their home screen. It does NOT require Play Store publishing.
+
+IMPORTANT: Do one stage at a time. Do not create Firebase accounts or copy configuration until the local preview opens.
+
+STAGE 1 — OPEN THE PROJECT
+1. Download the ZIP and choose “Extract All” in Windows File Explorer.
+2. Open the extracted “roomtab” folder in Visual Studio Code (File > Open Folder).
+3. In VS Code, select Terminal > New Terminal.
+4. Run each command separately:
+
+   node --version
+   npm --version
+   npm install
+   npm run dev
+
+5. When Vite prints a local URL such as http://localhost:5173, hold Ctrl and click it, or copy it into Chrome.
+6. You should see a sample dashboard. Without Firebase configuration this is PREVIEW MODE only. Its sample changes are not shared with roommates and are not a backup.
+
+You can also double-click START-ROOMTAB-Windows.bat from File Explorer to start the local server. If Windows shows a security prompt, use the VS Code terminal steps above instead.
+
+STAGE 2 — CONNECT THE SHARED DATABASE (ONLY AFTER STAGE 1 WORKS)
+Read docs/SETUP.md. It explains how to create a Firebase project on the Spark no-cost plan, enable Google and email login, create Firestore, deploy the rules, configure .env.local, and test with a second account.
+
+STAGE 3 — HOST A PUBLIC LINK
+Continue with the Hosting section of docs/SETUP.md. The Firebase CLI publishes the app to a URL ending in web.app. Open it in Android Chrome and choose “Install app” or “Add to Home screen”.
+
+COST WARNING
+Keep the Firebase project on Spark and do not attach a billing account if you cannot accept charges. Firebase has usage quotas; if a quota is exceeded, a service can become unavailable until the quota resets. No free hosting provider can be guaranteed free forever, and terms can change.
+
+CURRENT LIMITATIONS
+- Offline expense entry/sync is not implemented.
+- The reminder control saves each user's preference but does not yet send scheduled notifications.
+- There is no opening-balance import yet. Before using real records, agree on a start date or make sure the old canteen debt is settled.
+- Test with two accounts and compare totals with the notebook before relying on real-money balances.
+- The source parses correctly, but this package has not received a complete local build in the authoring environment because that environment could not reach the npm package registry. npm install on your computer needs an internet connection to download dependencies.
+
+IF SOMETHING FAILS
+Copy the exact error text from VS Code's terminal (especially the first error) or send a screenshot. Never share passwords, private keys, tokens, or any service-account JSON file.
