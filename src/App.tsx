@@ -172,7 +172,7 @@ export default function App() {
   const activePayments=data.payments.filter(p=>!p.is_deleted);
   const activeReimbursements=data.reimbursements.filter(r=>!r.is_deleted);
   const thisMonth=monthStart();
-  const {thisMonthExpenses,thisMonthPayments,roomDebt,ownNet}=calculateRoomAccounting({
+  const {thisMonthExpenses,thisMonthPayments,totalExpenses,totalPayments,roomDebt,ownNet}=calculateRoomAccounting({
     expenses:data.expenses,
     payments:data.payments,
     reimbursements:data.reimbursements,
