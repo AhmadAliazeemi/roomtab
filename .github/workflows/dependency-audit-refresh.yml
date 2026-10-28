@@ -51,6 +51,9 @@ jobs:
       - name: Verify lockfile install
         run: npm ci
 
+      - name: Confirm the patched dependency is installed for Workbox
+        run: npm ls deepmerge --all
+
       - name: Test the deepmerge security backport
         run: npm run test:security
 

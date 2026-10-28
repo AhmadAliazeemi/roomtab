@@ -22,10 +22,10 @@
     "@vitejs/plugin-react": "^4.7.0",
     "typescript": "~5.8.3",
     "vite": "^6.3.5",
-    "vite-plugin-pwa": "^0.21.1"
+    "vite-plugin-pwa": "^0.21.1",
+    "deepmerge": "file:vendor/deepmerge"
   },
   "overrides": {
-    "@grpc/grpc-js": "1.13.7",
-    "deepmerge": "file:vendor/deepmerge"
+    "@grpc/grpc-js": "1.13.7"
   }
 }
