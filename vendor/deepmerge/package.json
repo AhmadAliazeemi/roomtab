@@ -8,8 +8,5 @@
   "license": "MIT",
   "engines": {
     "node": ">=18"
-  },
-  "dependencies": {
-    "is-mergeable-object": "1.1.0"
   }
 }
