@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/roomtab-192.png', 'icons/roomtab-512.png'],
       manifest: {
-        name: 'RoomTab — Hostel Canteen Ledger',
-        short_name: 'RoomTab',
+        name: 'My MBA Room — Hostel Canteen Ledger',
+        short_name: 'My MBA Room',
         description: 'Keep hostel canteen expenses and balances clear.',
         theme_color: '#f6f1e5',
         background_color: '#f6f1e5',
