@@ -49,6 +49,10 @@ async function seedFixtures() {
       user_id: 'member', display_name: 'Member', email: 'member@example.com',
       role: 'member', is_active: true, joined_at: timestamp, join_code: 'JOIN1234'
     });
+    await setDoc(doc(db, 'rooms', 'room1', 'members', 'other'), {
+      user_id: 'other', display_name: 'Other', email: 'other@example.com',
+      role: 'member', is_active: true, joined_at: timestamp, join_code: 'JOIN1234'
+    });
     await setDoc(doc(db, 'rooms', 'room1', 'members', 'inactive'), {
       user_id: 'inactive', display_name: 'Inactive', email: 'inactive@example.com',
       role: 'member', is_active: false, joined_at: timestamp, left_at: timestamp
@@ -122,7 +126,7 @@ test('a valid meal and its matching activity record can be saved atomically', as
   assert.equal(saved.data().total_amount, 10);
 });
 
-test('expense shares must add up exactly and belong to active members', async () => {
+test('expense shares must reconcile to the exact cent and use active unique members', async () => {
   const wrongTotal = sampleExpense({
     id: 'bad-share-total',
     total_amount: 10,
@@ -135,6 +139,52 @@ test('expense shares must add up exactly and belong to active members', async ()
     shares: [{ user_id: 'inactive', amount: 10 }]
   });
   await assertFails(setExpenseAndLog(inactiveParticipant));
+
+  const activeCentExactSplit = sampleExpense({
+    id: 'active-cent-exact-split',
+    total_amount: 10,
+    shares: [
+      { user_id: 'admin', amount: 3.34 },
+      { user_id: 'member', amount: 3.33 },
+      { user_id: 'other', amount: 3.33 }
+    ]
+  });
+  await assertSucceeds(setExpenseAndLog(activeCentExactSplit));
+
+  const duplicateParticipant = sampleExpense({
+    id: 'duplicate-participant',
+    total_amount: 10,
+    shares: [
+      { user_id: 'member', amount: 5 },
+      { user_id: 'member', amount: 5 }
+    ]
+  });
+  await assertFails(setExpenseAndLog(duplicateParticipant));
+});
+
+test('meal and payment month keys must match their dates', async () => {
+  const mismatchedExpense = sampleExpense({
+    id: 'mismatched-expense-month',
+    meal_date: '2026-09-15',
+    month_key: '2026-10-01'
+  });
+  await assertFails(setExpenseAndLog(mismatchedExpense));
+
+  const db = env.authenticatedContext('member').firestore();
+  const mismatchedPayment = samplePayment({
+    id: 'mismatched-payment-month',
+    payment_date: '2026-09-15',
+    month_key: '2026-10-01'
+  });
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'rooms', 'room1', 'payments', mismatchedPayment.id), mismatchedPayment);
+  batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    action: 'payment.recorded',
+    entityType: 'canteen_payment',
+    entityId: mismatchedPayment.id,
+    afterData: mismatchedPayment
+  }));
+  await assertFails(batch.commit());
 });
 
 test('a member cannot edit another member\'s expense', async () => {
