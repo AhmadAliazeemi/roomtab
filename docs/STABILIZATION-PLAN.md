@@ -15,7 +15,7 @@ This document tracks the first low-risk stabilization pass. It does not claim th
 2. Run `npm run test:accounting`, `npm run test:security`, and `npm run build`; fix any error before deployment.
 3. Test in local preview with demo mode.
 4. Test Firebase using two separate accounts and a test room before using real money.
-5. Do not deploy Firestore rule changes until the rule tests pass. This branch has not yet changed the database rules.
+5. Do not deploy Firestore rule changes until the new emulator rule tests pass in CI.
 
 ## Accounting tests now automated
 Run `npm run test:accounting` to verify equal-split remainders, duplicate participant normalization, invalid sub-cent/empty splits, personal payment and reimbursement math, deleted-entry exclusion, date-based legacy month fallback, and monthly closing snapshots.
@@ -28,6 +28,9 @@ Run `npm run test:accounting` to verify equal-split remainders, duplicate partic
 - Deleted expenses/payments are excluded from active totals but remain visible in history (automated).
 - Closing a month blocks changes to that month's expenses and payments until an authorized admin reopens it.
 
+## Security Rules emulator tests
+The `npm run test:rules` suite runs against the actual `firestore.rules` file in the Firestore Emulator. CI also runs the accounting and deepmerge regression suites before the production build.
+
 ## Security tests required before real use
 - A non-member cannot read any room collection.
 - A member cannot grant themselves admin privileges or change another member's role.
@@ -38,7 +41,7 @@ Run `npm run test:accounting` to verify equal-split remainders, duplicate partic
 - Removing a member revokes access to all room data.
 
 ## Known work still outstanding
-- Stronger Firestore validation and automated Firebase Emulator security-rule tests.
+- Firestore rules hardening and automated Firebase Emulator security-rule tests are being added in a separate, tested change.
 - Atomic and trustworthy room-create/join audit events.
 - Automated accounting tests are now part of CI; Firestore authorization tests remain outstanding.
 - Test Google and email authentication against the actual Firebase project and authorized domains.

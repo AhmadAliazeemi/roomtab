@@ -23,5 +23,11 @@ jobs:
         run: npm run test:accounting
       - name: Test dependency security backport
         run: npm run test:security
+      - name: Test accounting calculations
+        run: npm run test:accounting
+      - name: Test deepmerge security regression
+        run: npm run test:security
+      - name: Test Firestore rules in the emulator
+        run: npx --yes firebase-tools@15.30.2 emulators:exec --only firestore --project demo-my-mba-room "npm run test:rules"
       - name: Type-check and build
         run: npm run build
