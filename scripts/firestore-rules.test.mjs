@@ -593,6 +593,35 @@ test('a material meal correction creates a new confirmation round and preserves 
   assert.equal(oldRound.exists(), true);
   assert.equal(newRound.data().total_amount, 12);
   assert.equal(newRound.data().version, 2);
+
+  const otherDb = env.authenticatedContext('other').firestore();
+  const oldResponseRef = doc(otherDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const oldResponse = (await getDoc(oldResponseRef)).data();
+  const lateApproval = {
+    ...oldResponse,
+    status: 'approved',
+    responded_at: '2026-10-28T13:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  };
+  const lateBatch = writeBatch(otherDb);
+  lateBatch.update(oldResponseRef, {
+    status: 'approved',
+    responded_at: lateApproval.responded_at,
+    responded_by: 'other',
+    dispute_reason: ''
+  });
+  const oldActivityId = 'meal-confirmation-round-v1-other';
+  lateBatch.set(doc(otherDb, 'rooms', 'room1', 'activity', oldActivityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_approved',
+    entityType: 'meal_confirmation',
+    entityId: oldActivityId,
+    beforeData: oldResponse,
+    afterData: lateApproval,
+    detail: 'Late approval for superseded meal version'
+  }));
+  await assertFails(lateBatch.commit());
 });
 
 test('a roommate not selected for a meal cannot create or change a confirmation response', async () => {
