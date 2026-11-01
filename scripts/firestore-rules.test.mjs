@@ -102,6 +102,72 @@ function sampleLog({ action, entityType, entityId, actorId = 'member', beforeDat
   };
 }
 
+async function enableMealConfirmation() {
+  await env.withSecurityRulesDisabled(async context => {
+    await updateDoc(doc(context.firestore(), 'rooms', 'room1'), { require_meal_confirmation: true });
+  });
+}
+
+function sampleConfirmationExpense(overrides = {}) {
+  return sampleExpense({
+    id: 'confirmation-meal',
+    shares: [{ user_id: 'member', amount: 5 }, { user_id: 'other', amount: 5 }],
+    confirmation_required: true,
+    confirmation_version: 1,
+    confirmation_round_id: 'round-v1',
+    ...overrides
+  });
+}
+
+function sampleConfirmationRound(expense, overrides = {}) {
+  return {
+    id: expense.confirmation_round_id,
+    room_id: 'room1',
+    expense_id: expense.id,
+    version: expense.confirmation_version,
+    created_by: expense.created_by,
+    created_at: timestamp,
+    total_amount: expense.total_amount,
+    meal_date: expense.meal_date,
+    shares: expense.shares,
+    ...overrides
+  };
+}
+
+async function writeConfirmationMeal(expense, responseOverrides = {}) {
+  const db = env.authenticatedContext(expense.created_by).firestore();
+  const round = sampleConfirmationRound(expense);
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id), expense);
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', round.id), round);
+  for (const share of expense.shares) {
+    const isCreator = share.user_id === expense.created_by;
+    const response = {
+      room_id: 'room1',
+      expense_id: expense.id,
+      round_id: round.id,
+      version: round.version,
+      user_id: share.user_id,
+      requested_by: expense.created_by,
+      status: isCreator ? 'approved' : 'pending',
+      dispute_reason: '',
+      created_at: timestamp,
+      responded_at: isCreator ? timestamp : null,
+      responded_by: isCreator ? expense.created_by : null,
+      ...(responseOverrides[share.user_id] || {})
+    };
+    batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', round.id, 'responses', share.user_id), response);
+  }
+  batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    actorId: expense.created_by,
+    action: 'expense.created',
+    entityType: 'expense',
+    entityId: expense.id,
+    afterData: expense
+  }));
+  return batch.commit();
+}
+
 async function setExpenseAndLog(expense, actorId = 'member', action = 'expense.created') {
   const db = env.authenticatedContext(actorId).firestore();
   const batch = writeBatch(db);
@@ -288,6 +354,132 @@ test('room creation is one authorized batch including its creation audit record'
     after_data: { name: 'Study Room' }, detail: 'Created room Study Room', created_at: timestamp
   });
   await assertSucceeds(batch.commit());
+});
+
+
+test('meal confirmation must be enabled by the room and is only an admin setting', async () => {
+  const memberDb = env.authenticatedContext('member').firestore();
+  const memberBatch = writeBatch(memberDb);
+  memberBatch.update(doc(memberDb, 'rooms', 'room1'), { require_meal_confirmation: true });
+  memberBatch.set(doc(memberDb, 'rooms', 'room1', 'activity', 'member-enabled-confirmation'), sampleLog({
+    actorId: 'member',
+    action: 'room.meal_confirmation_setting_changed',
+    entityType: 'room',
+    entityId: 'room1',
+    beforeData: false,
+    afterData: true
+  }));
+  await assertFails(memberBatch.commit());
+
+  const adminDb = env.authenticatedContext('admin').firestore();
+  const adminBatch = writeBatch(adminDb);
+  adminBatch.update(doc(adminDb, 'rooms', 'room1'), { require_meal_confirmation: true });
+  adminBatch.set(doc(adminDb, 'rooms', 'room1', 'activity', 'admin-enabled-confirmation'), sampleLog({
+    actorId: 'admin',
+    action: 'room.meal_confirmation_setting_changed',
+    entityType: 'room',
+    entityId: 'room1',
+    beforeData: false,
+    afterData: true
+  }));
+  await assertSucceeds(adminBatch.commit());
+});
+
+test('a room requiring meal confirmation rejects an expense without a matching immutable round', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense({ id: 'missing-confirmation-round' });
+  await assertFails(setExpenseAndLog(expense));
+});
+
+test('a meal and its confirmation round are created atomically with creator approval and other participants pending', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const creatorResponse = await assertSucceeds(getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'member')));
+  const otherResponse = await assertSucceeds(getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other')));
+  assert.equal(creatorResponse.data().status, 'approved');
+  assert.equal(otherResponse.data().status, 'pending');
+});
+
+test('a meal creator cannot create an approval on behalf of another selected roommate', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertFails(writeConfirmationMeal(expense, {
+    other: {
+      status: 'approved',
+      responded_at: timestamp,
+      responded_by: 'member',
+      dispute_reason: ''
+    }
+  }));
+});
+
+test('only the selected participant can approve their own pending response with an audit event', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const before = (await getDoc(responseRef)).data();
+  const after = {
+    ...before,
+    status: 'approved',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  };
+  const activityId = 'meal-confirmation-round-v1-other';
+  const batch = writeBatch(db);
+  batch.update(responseRef, {
+    status: 'approved',
+    responded_at: after.responded_at,
+    responded_by: 'other',
+    dispute_reason: ''
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_approved',
+    entityType: 'meal_confirmation',
+    entityId: activityId,
+    beforeData: before,
+    afterData: after,
+    detail: 'Confirmed participation in meal'
+  }));
+  await assertSucceeds(batch.commit());
+});
+
+test('a roommate not selected for a meal cannot create or change a confirmation response', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense({
+    id: 'meal-without-admin',
+    shares: [{ user_id: 'member', amount: 10 }]
+  });
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('admin').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'admin');
+  await assertFails(setDoc(responseRef, {
+    room_id: 'room1', expense_id: expense.id, round_id: 'round-v1', version: 1,
+    user_id: 'admin', requested_by: 'member', status: 'approved',
+    dispute_reason: '', created_at: timestamp, responded_at: timestamp, responded_by: 'admin'
+  }));
+});
+
+test('confirmation rounds are immutable and only active room members can read them', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const memberDb = env.authenticatedContext('other').firestore();
+  await assertFails(updateDoc(doc(memberDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1'), {
+    total_amount: 999
+  }));
+
+  const strangerDb = env.authenticatedContext('stranger').firestore();
+  await assertFails(getDoc(doc(strangerDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1')));
 });
 
 test('only admins can close a month', async () => {
