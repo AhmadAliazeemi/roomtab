@@ -189,12 +189,12 @@ service cloud.firestore {
         && data.room_id == roomId
         && data.expense_id == expenseId
         && data.round_id == roundId
-        && data.version == get(roundPath).data.version
+        && data.version == getAfter(roundPath).data.version
         && data.user_id == memberId
-        && data.requested_by == get(roundPath).data.created_by
+        && data.requested_by == getAfter(roundPath).data.created_by
         && data.status in ['pending', 'approved', 'disputed']
         && data.dispute_reason is string && data.dispute_reason.size() <= 500
-        && data.created_at == get(roundPath).data.created_at
+        && data.created_at == getAfter(roundPath).data.created_at
         && isSelectedInShares(get(roundPath).data.shares, memberId);
     }
     function validPaymentData(roomId, paymentId, data) {
@@ -577,7 +577,7 @@ service cloud.firestore {
           && monthIsOpen(roomId, resource.data.month_key)
           && monthIsOpen(roomId, request.resource.data.month_key);
         allow delete: if false;
-      }
+
 
         match /confirmationRounds/{roundId} {
           allow read: if isRoomMember(roomId);
@@ -589,15 +589,15 @@ service cloud.firestore {
             allow read: if isRoomMember(roomId);
             allow create: if isRoomMember(roomId)
               && validConfirmationResponseShape(roomId, expenseId, roundId, memberId, request.resource.data)
-              && exists(confirmationRoundPath(roomId, expenseId, roundId))
+              && existsAfter(confirmationRoundPath(roomId, expenseId, roundId))
               && (
-                (request.auth.uid == get(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
+                (request.auth.uid == getAfter(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
                   && memberId == request.auth.uid
                   && request.resource.data.status == 'approved'
                   && request.resource.data.responded_by == request.auth.uid
                   && request.resource.data.responded_at is string
                   && request.resource.data.dispute_reason == '')
-                || (request.auth.uid == get(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
+                || (request.auth.uid == getAfter(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
                   && memberId != request.auth.uid
                   && request.resource.data.status == 'pending'
                   && request.resource.data.responded_by == null
