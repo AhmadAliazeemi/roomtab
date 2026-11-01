@@ -181,6 +181,7 @@ service cloud.firestore {
         && data.created_by == request.auth.uid
         && data.created_at is string
         && existsAfter(parentPath)
+        && (!exists(parentPath) || get(parentPath).data.confirmation_round_id != roundId)
         && getAfter(parentPath).data.confirmation_required == true
         && getAfter(parentPath).data.confirmation_round_id == roundId
         && getAfter(parentPath).data.confirmation_version == data.version
