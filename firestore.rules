@@ -16,6 +16,12 @@ service cloud.firestore {
     function confirmationResponseActivityPath(roomId, roundId, memberId) {
       return /databases/$(database)/documents/rooms/$(roomId)/activity/$("meal-confirmation-" + roundId + "-" + memberId);
     }
+    function confirmationResponseCreateHasAudit(roomId, roundId, memberId, responseData) {
+      let path = confirmationResponseActivityPath(roomId, roundId, memberId);
+      return existsAfter(path)
+        && getAfter(path).data.actor_id == request.auth.uid
+        && getAfter(path).data.after_data == responseData;
+    }
     function isSelectedInShares(shares, memberId) {
       return (shares.size() > 0 && shares[0].user_id == memberId)
         || (shares.size() > 1 && shares[1].user_id == memberId)
@@ -388,12 +394,17 @@ service cloud.firestore {
       let path = confirmationResponsePath(roomId, response.expense_id, response.round_id, response.user_id);
       return request.resource.data.entity_type == 'meal_confirmation'
         && request.resource.data.entity_id == ('meal-confirmation-' + response.round_id + '-' + response.user_id)
-        && request.resource.data.before_data is map
         && request.resource.data.after_data is map
-        && request.resource.data.before_data == get(path).data
         && request.resource.data.after_data == getAfter(path).data
+        && (
+          (request.resource.data.before_data is map
+            && exists(path)
+            && request.resource.data.before_data == get(path).data
+            && get(path).data.status == 'pending')
+          || (request.resource.data.before_data == null
+            && !exists(path) && existsAfter(path))
+        )
         && request.resource.data.actor_id == response.user_id
-        && get(path).data.status == 'pending'
         && getAfter(path).data.responded_by == request.auth.uid
         && (
           (request.resource.data.action == 'meal.confirmation_approved' && getAfter(path).data.status == 'approved')
@@ -596,7 +607,8 @@ service cloud.firestore {
                   && request.resource.data.status == 'approved'
                   && request.resource.data.responded_by == request.auth.uid
                   && request.resource.data.responded_at is string
-                  && request.resource.data.dispute_reason == '')
+                  && request.resource.data.dispute_reason == ''
+                  && confirmationResponseCreateHasAudit(roomId, roundId, memberId, request.resource.data))
                 || (request.auth.uid == getAfter(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
                   && memberId != request.auth.uid
                   && request.resource.data.status == 'pending'
@@ -609,7 +621,8 @@ service cloud.firestore {
                   && request.resource.data.responded_at is string
                   && (request.resource.data.status == 'approved'
                     ? request.resource.data.dispute_reason == ''
-                    : request.resource.data.dispute_reason.size() > 0))
+                    : request.resource.data.dispute_reason.size() > 0)
+                  && confirmationResponseCreateHasAudit(roomId, roundId, memberId, request.resource.data))
               );
             allow update: if isRoomMember(roomId)
               && request.auth.uid == memberId
