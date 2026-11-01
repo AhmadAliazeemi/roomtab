@@ -463,6 +463,138 @@ test('only the selected participant can approve their own pending response with 
   await assertSucceeds(batch.commit());
 });
 
+
+test('a selected participant can dispute their own share and the reason is audited', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const before = (await getDoc(responseRef)).data();
+  const after = {
+    ...before,
+    status: 'disputed',
+    dispute_reason: 'I was not present for this meal.',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other'
+  };
+  const activityId = 'meal-confirmation-round-v1-other';
+  const batch = writeBatch(db);
+  batch.update(responseRef, {
+    status: 'disputed',
+    dispute_reason: after.dispute_reason,
+    responded_at: after.responded_at,
+    responded_by: 'other'
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_disputed',
+    entityType: 'meal_confirmation',
+    entityId: activityId,
+    beforeData: before,
+    afterData: after,
+    detail: 'Disputed participation in meal'
+  }));
+  await assertSucceeds(batch.commit());
+  const saved = await getDoc(responseRef);
+  assert.equal(saved.data().status, 'disputed');
+  assert.equal(saved.data().dispute_reason, 'I was not present for this meal.');
+});
+
+test('a participant cannot approve or dispute without an atomic audit record', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  await assertFails(updateDoc(responseRef, {
+    status: 'approved',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  }));
+});
+
+test('a material meal correction creates a new confirmation round and preserves the old one', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('member').firestore();
+  const expenseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id);
+  const before = (await getDoc(expenseRef)).data();
+  const now = '2026-10-28T13:00:00.000Z';
+  const updated = {
+    ...before,
+    total_amount: 12,
+    updated_at: now,
+    confirmation_version: 2,
+    confirmation_round_id: 'round-v2',
+    shares: [{ user_id: 'member', amount: 6 }, { user_id: 'other', amount: 6 }]
+  };
+  const round = sampleConfirmationRound(updated, {
+    id: 'round-v2',
+    version: 2,
+    created_at: now
+  });
+  const batch = writeBatch(db);
+  batch.update(expenseRef, {
+    total_amount: updated.total_amount,
+    updated_at: now,
+    confirmation_version: 2,
+    confirmation_round_id: 'round-v2',
+    shares: updated.shares
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2'), round);
+  for (const share of updated.shares) {
+    const isCreator = share.user_id === 'member';
+    const response = {
+      room_id: 'room1',
+      expense_id: expense.id,
+      round_id: 'round-v2',
+      version: 2,
+      user_id: share.user_id,
+      requested_by: 'member',
+      status: isCreator ? 'approved' : 'pending',
+      dispute_reason: '',
+      created_at: now,
+      responded_at: isCreator ? now : null,
+      responded_by: isCreator ? 'member' : null
+    };
+    batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2', 'responses', share.user_id), response);
+    if (isCreator) {
+      const activityId = 'meal-confirmation-round-v2-member';
+      batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+        actorId: 'member',
+        action: 'meal.confirmation_approved',
+        entityType: 'meal_confirmation',
+        entityId: activityId,
+        beforeData: null,
+        afterData: response,
+        detail: 'Confirmed own participation in corrected meal'
+      }));
+    }
+  }
+  batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    actorId: 'member',
+    action: 'expense.updated',
+    entityType: 'expense',
+    entityId: expense.id,
+    beforeData: before,
+    afterData: updated,
+    detail: 'Corrected meal amount and shares'
+  }));
+  await assertSucceeds(batch.commit());
+
+  const oldRound = await getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1'));
+  const newRound = await getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2'));
+  assert.equal(oldRound.exists(), true);
+  assert.equal(newRound.data().total_amount, 12);
+  assert.equal(newRound.data().version, 2);
+});
+
 test('a roommate not selected for a meal cannot create or change a confirmation response', async () => {
   await enableMealConfirmation();
   const expense = sampleConfirmationExpense({
