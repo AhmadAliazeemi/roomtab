@@ -389,12 +389,10 @@ service cloud.firestore {
         && isRoomAdmin(roomId)
         && getAfter(path).data.require_meal_confirmation == request.resource.data.after_data;
     }
-    function confirmationResponseActivityMatches(roomId) {
-      let response = request.resource.data.after_data;
+    function confirmationResponseActivityMatchesData(roomId, response) {
       let path = confirmationResponsePath(roomId, response.expense_id, response.round_id, response.user_id);
       return request.resource.data.entity_type == 'meal_confirmation'
         && request.resource.data.entity_id == ('meal-confirmation-' + response.round_id + '-' + response.user_id)
-        && request.resource.data.after_data is map
         && request.resource.data.after_data == getAfter(path).data
         && (
           (request.resource.data.before_data is map
@@ -410,6 +408,12 @@ service cloud.firestore {
           (request.resource.data.action == 'meal.confirmation_approved' && getAfter(path).data.status == 'approved')
           || (request.resource.data.action == 'meal.confirmation_disputed' && getAfter(path).data.status == 'disputed')
         );
+    }
+    function confirmationResponseActivityMatches(roomId) {
+      return request.resource.data.action in ['meal.confirmation_approved', 'meal.confirmation_disputed']
+        && request.resource.data.after_data is map
+        && request.resource.data.after_data.keys().hasAll(['expense_id', 'round_id', 'user_id'])
+        && confirmationResponseActivityMatchesData(roomId, request.resource.data.after_data);
     }
     function memberRemovedActivityMatches(roomId) {
       let memberId = request.resource.data.entity_id;
