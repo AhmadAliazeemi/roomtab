@@ -519,7 +519,7 @@ test('a participant cannot approve or dispute without an atomic audit record', a
 
 test('a material meal correction creates a new confirmation round and preserves the old one', async () => {
   await enableMealConfirmation();
-  const expense = sampleConfirmationExpense();
+  const expense = sampleConfirmationExpense({ shares: [{ user_id: 'member', amount: 10 }] });
   await assertSucceeds(writeConfirmationMeal(expense));
 
   const db = env.authenticatedContext('member').firestore();
@@ -532,7 +532,7 @@ test('a material meal correction creates a new confirmation round and preserves 
     updated_at: now,
     confirmation_version: 2,
     confirmation_round_id: 'round-v2',
-    shares: [{ user_id: 'member', amount: 6 }, { user_id: 'other', amount: 6 }]
+    shares: [{ user_id: 'member', amount: 12 }]
   };
   const round = sampleConfirmationRound(updated, {
     id: 'round-v2',
