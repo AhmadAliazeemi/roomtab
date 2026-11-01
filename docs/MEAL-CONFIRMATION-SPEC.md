@@ -87,3 +87,22 @@ No unanswered request is ever treated as approved.
 ## Related agreed accounting change
 
 Remove the automatic room overpayment-credit behavior from the user experience. The intended policy is to allow partial payments and payments up to the outstanding canteen debt, while rejecting a payment that would exceed the current outstanding debt. Preserve payer-versus-recorder attribution and correct individual roommate balances. This accounting change is a separate implementation task and must have dedicated tests, including concurrent/stale-balance considerations.
+
+## Secure foundation implementation status
+
+Implemented on the feature branch:
+- Room administrators can enable or disable the setting. New rooms default to confirmation off; legacy rooms without the field are treated as off.
+- The setting applies to new meals only. Existing meals retain their stored confirmation behavior when the setting changes.
+- A confirmation-required meal stores a version number and a pointer to an immutable confirmation-round snapshot containing the current amount, date, and shares.
+- Initial response records are created in the same Firestore batch as the meal. The recorder is auto-approved only for their own share when they selected themselves; all other selected members start as pending.
+- Material edits to amount, date, or shares create a new confirmation round and preserve previous round records. Description-only edits retain the current round.
+- Firestore rules restrict response creation/update to the selected member, prevent a meal creator from approving for another person, deny response deletion and round mutation, and require an atomic matching activity record for an approval/dispute.
+- Emulator tests cover administrator-only setting changes, the required round on new confirmation-enabled meals, initial creator/pending states, forged approval denial, selected-member self-response with audit, non-selected response denial, and immutable rounds.
+
+Not included in this secure-foundation change:
+- The in-app notification inbox and participant approval/dispute screens.
+- Push notification delivery.
+- Scheduled 24-hour and 48-hour reminders. These need a server-side scheduler and deployment planning.
+- The overpayment policy change, which remains a separate accounting task.
+
+The foundation must pass the GitHub Firestore Emulator tests and production build before it is merged. No production Firebase rules deployment is part of this work.
