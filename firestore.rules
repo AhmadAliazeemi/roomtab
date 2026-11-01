@@ -191,7 +191,13 @@ service cloud.firestore {
     }
     function validConfirmationResponseShape(roomId, expenseId, roundId, memberId, data) {
       let roundPath = confirmationRoundPath(roomId, expenseId, roundId);
-      return data.keys().hasAll(['room_id', 'expense_id', 'round_id', 'version', 'user_id', 'requested_by', 'status', 'dispute_reason', 'created_at', 'responded_at', 'responded_by'])
+      let parentPath = expensePath(roomId, expenseId);
+      return existsAfter(parentPath)
+        && getAfter(parentPath).data.confirmation_required == true
+        && getAfter(parentPath).data.is_deleted == false
+        && getAfter(parentPath).data.confirmation_round_id == roundId
+        && getAfter(parentPath).data.confirmation_version == getAfter(roundPath).data.version
+        && data.keys().hasAll(['room_id', 'expense_id', 'round_id', 'version', 'user_id', 'requested_by', 'status', 'dispute_reason', 'created_at', 'responded_at', 'responded_by'])
         && data.keys().hasOnly(['room_id', 'expense_id', 'round_id', 'version', 'user_id', 'requested_by', 'status', 'dispute_reason', 'created_at', 'responded_at', 'responded_by'])
         && data.room_id == roomId
         && data.expense_id == expenseId
