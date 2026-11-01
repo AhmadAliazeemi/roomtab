@@ -146,7 +146,7 @@ service cloud.firestore {
     }
     function validExpenseData(roomId, expenseId, data) {
       return data.keys().hasAll(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares'])
-        && data.keys().hasOnly(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares'])
+        && data.keys().hasOnly(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares', 'confirmation_required', 'confirmation_version', 'confirmation_round_id'])
         && data.id == expenseId
         && data.room_id == roomId
         && data.created_by is string
@@ -195,7 +195,7 @@ service cloud.firestore {
         && data.status in ['pending', 'approved', 'disputed']
         && data.dispute_reason is string && data.dispute_reason.size() <= 500
         && data.created_at == getAfter(roundPath).data.created_at
-        && isSelectedInShares(get(roundPath).data.shares, memberId);
+        && isSelectedInShares(getAfter(roundPath).data.shares, memberId);
     }
     function validPaymentData(roomId, paymentId, data) {
       return data.keys().hasAll(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at'])
