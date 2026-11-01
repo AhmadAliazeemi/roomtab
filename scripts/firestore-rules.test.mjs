@@ -157,6 +157,18 @@ async function writeConfirmationMeal(expense, responseOverrides = {}) {
       ...(responseOverrides[share.user_id] || {})
     };
     batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', round.id, 'responses', share.user_id), response);
+    if (isCreator) {
+      const activityId = `meal-confirmation-${round.id}-${share.user_id}`;
+      batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+        actorId: expense.created_by,
+        action: 'meal.confirmation_approved',
+        entityType: 'meal_confirmation',
+        entityId: activityId,
+        beforeData: null,
+        afterData: response,
+        detail: 'Confirmed own participation in meal'
+      }));
+    }
   }
   batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
     actorId: expense.created_by,
