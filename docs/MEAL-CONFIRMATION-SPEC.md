@@ -106,3 +106,7 @@ Not included in this secure-foundation change:
 - The overpayment policy change, which remains a separate accounting task.
 
 The foundation must pass the GitHub Firestore Emulator tests and production build before it is merged. No production Firebase rules deployment is part of this work.
+
+- The response rules also verify that a participant is answering the expense's current confirmation round; late responses to superseded rounds are denied.
+- Dispute reasons are stored on the participant response and the approval/dispute write requires a matching audit event in the same batch.
+- Latest GitHub Actions run for the feature branch passed the accounting tests, dependency security regression test, 22 Firestore Emulator tests, and production build.
