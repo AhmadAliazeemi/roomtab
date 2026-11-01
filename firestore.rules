@@ -273,7 +273,7 @@ service cloud.firestore {
         && existsAfter(path)
         && request.resource.data.after_data == getAfter(path).data
         && getAfter(path).data.room_id == roomId
-        && (getAfter(path).data.confirmation_required != true || confirmationRoundMatchesExpenseAfter(roomId, expenseId, getAfter(path).data))
+        && (getAfter(path).data.get('confirmation_required', false) != true || confirmationRoundMatchesExpenseAfter(roomId, expenseId, getAfter(path).data))
         && (
           (action == 'expense.created' && !exists(path) && request.resource.data.before_data == null && getAfter(path).data.created_by == request.auth.uid)
           || (action == 'expense.updated' && exists(path)
