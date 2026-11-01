@@ -229,6 +229,10 @@ export default function App() {
           const isCreator=share.user_id===currentUserId;
           const response={room_id:room.id,expense_id:expense.id,round_id:confirmationRoundId,version:confirmationVersion,user_id:share.user_id,requested_by:currentUserId,status:isCreator?'approved':'pending',dispute_reason:'',created_at:now,responded_at:isCreator?now:null,responded_by:isCreator?currentUserId:null};
           batch.set(doc(firestore,'rooms',room.id,'expenses',expense.id,'confirmationRounds',confirmationRoundId,'responses',share.user_id),response);
+          if(isCreator){
+            const activityId=`meal-confirmation-${confirmationRoundId}-${share.user_id}`;
+            batch.set(doc(firestore,'rooms',room.id,'activity',activityId),{room_id:room.id,actor_id:currentUserId,action:'meal.confirmation_approved',entity_type:'meal_confirmation',entity_id:activityId,before_data:null,after_data:response,detail:'Confirmed own participation in meal',created_at:now});
+          }
         }
       }
       recordLog(batch,room.id,currentUserId,before?'expense.updated':'expense.created','expense',expense.id,before||null,expense,before?'Corrected meal expense':'Added meal expense');await batch.commit();setMealDraft(null);await refresh();announce(before?'Meal expense corrected.':confirmationRequired?'Meal saved. Participant confirmations are now required.':'Meal expense saved.');}catch(e){announce(e instanceof Error?e.message:'Could not save the meal.','error');}finally{setBusy(false);}
