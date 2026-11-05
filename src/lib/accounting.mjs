@@ -104,52 +104,74 @@ function distributeProportionally(totalCents, weightedItems) {
 
 export function calculateMemberBalances({ expenses = EMPTY_LIST, payments = EMPTY_LIST } = {}) {
   const sharesByMember = new Map();
-  for (const expense of active(expenses)) {
-    for (const share of expense.shares || EMPTY_LIST) {
-      if (!share || typeof share.user_id !== 'string' || !share.user_id) continue;
-      const cents = Number(share.amount);
-      if (!Number.isFinite(cents)) continue;
-      sharesByMember.set(share.user_id, (sharesByMember.get(share.user_id) || 0) + moneyToCents(cents));
-    }
-  }
+  const paidByMember = new Map();
+  const events = [
+    ...active(expenses).map(item => ({
+      type: 'expense',
+      date: item.meal_date || '',
+      createdAt: item.created_at || '',
+      id: item.id || '',
+      item
+    })),
+    ...active(payments).map(item => ({
+      type: 'payment',
+      date: item.payment_date || '',
+      createdAt: item.created_at || '',
+      id: item.id || '',
+      item
+    }))
+  ].sort((a, b) =>
+    a.date.localeCompare(b.date)
+    || a.createdAt.localeCompare(b.createdAt)
+    || (a.type === b.type ? 0 : a.type === 'expense' ? -1 : 1)
+    || a.id.localeCompare(b.id)
+  );
 
-  const explicitPaidByMember = new Map();
-  let legacyPaymentCents = 0;
-  for (const payment of active(payments)) {
+  for (const event of events) {
+    if (event.type === 'expense') {
+      for (const share of event.item.shares || EMPTY_LIST) {
+        if (!share || typeof share.user_id !== 'string' || !share.user_id) continue;
+        const value = Number(share.amount);
+        if (!Number.isFinite(value)) continue;
+        sharesByMember.set(share.user_id, (sharesByMember.get(share.user_id) || 0) + moneyToCents(value));
+      }
+      continue;
+    }
+
+    const payment = event.item;
     if (Array.isArray(payment.allocations) && payment.allocations.length > 0) {
       for (const allocation of payment.allocations) {
         if (!allocation || typeof allocation.user_id !== 'string' || !allocation.user_id) continue;
         const value = Number(allocation.amount);
         if (!Number.isFinite(value)) continue;
-        explicitPaidByMember.set(
+        paidByMember.set(
           allocation.user_id,
-          (explicitPaidByMember.get(allocation.user_id) || 0) + moneyToCents(value)
+          (paidByMember.get(allocation.user_id) || 0) + moneyToCents(value)
         );
       }
-    } else {
-      const value = Number(payment.amount);
-      if (Number.isFinite(value)) legacyPaymentCents += moneyToCents(value);
+      continue;
+    }
+
+    // Legacy payments did not record beneficiaries. Allocate them across
+    // the debts that existed on the payment date, not future meal entries.
+    const value = Number(payment.amount);
+    if (!Number.isFinite(value)) continue;
+    const weights = Array.from(sharesByMember.entries()).map(([user_id, shareCents]) => ({
+      user_id,
+      weightCents: Math.max(0, shareCents - (paidByMember.get(user_id) || 0))
+    })).filter(item => item.weightCents > 0);
+    const availableCents = weights.reduce((sum, item) => sum + item.weightCents, 0);
+    const allocation = distributeProportionally(Math.min(moneyToCents(value), availableCents), weights);
+    for (const [user_id, cents] of allocation) {
+      paidByMember.set(user_id, (paidByMember.get(user_id) || 0) + cents);
     }
   }
 
-  const memberIds = new Set([...sharesByMember.keys(), ...explicitPaidByMember.keys()]);
-  const remainingBeforeLegacy = [];
-  for (const user_id of memberIds) {
-    const shareCents = sharesByMember.get(user_id) || 0;
-    const explicitlyPaidCents = explicitPaidByMember.get(user_id) || 0;
-    const outstandingCents = Math.max(0, shareCents - explicitlyPaidCents);
-    if (outstandingCents > 0) remainingBeforeLegacy.push({ user_id, weightCents: outstandingCents });
-  }
-
-  const totalAvailableCents = remainingBeforeLegacy.reduce((sum, item) => sum + item.weightCents, 0);
-  const legacyToAllocateCents = Math.min(legacyPaymentCents, totalAvailableCents);
-  const legacyAllocation = distributeProportionally(legacyToAllocateCents, remainingBeforeLegacy);
-
+  const memberIds = new Set([...sharesByMember.keys(), ...paidByMember.keys()]);
   return Array.from(memberIds).sort((a, b) => a.localeCompare(b)).map(user_id => {
     const shareCents = sharesByMember.get(user_id) || 0;
-    const explicitlyPaidCents = explicitPaidByMember.get(user_id) || 0;
-    const legacyPaidCents = legacyAllocation.get(user_id) || 0;
-    const outstandingCents = Math.max(0, shareCents - explicitlyPaidCents - legacyPaidCents);
+    const paidCents = paidByMember.get(user_id) || 0;
+    const outstandingCents = Math.max(0, shareCents - paidCents);
     return {
       user_id,
       share: centsToMoney(shareCents),
