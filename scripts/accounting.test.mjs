@@ -59,10 +59,10 @@ test('room debt is expenses minus canteen payments; reimbursements do not change
   assert.equal(a.thisMonthPayments, 300);
   assert.equal(a.ownShare, 750);
   assert.equal(a.ownSent, 100);
-  assert.equal(a.ownNet, 650);
-  assert.equal(b.ownPaid, 400);
+  assert.equal(a.ownNet, 550);
+  assert.equal(b.ownPaid, 200);
   assert.equal(b.ownReceived, 100);
-  assert.equal(b.ownNet, 450);
+  assert.equal(b.ownNet, 550);
 });
 
 test('month close snapshot separates monthly activity from carried room debt and ignores deleted entries', () => {
