@@ -210,9 +210,48 @@ service cloud.firestore {
         && data.created_at == getAfter(roundPath).data.created_at
         && isSelectedInShares(getAfter(roundPath).data.shares, memberId);
     }
+    function validAllocationAt(roomId, allocations, index) {
+      return allocations.size() <= index || (
+        allocations[index] is map
+        && allocations[index].keys().hasAll(['user_id', 'amount'])
+        && allocations[index].keys().hasOnly(['user_id', 'amount'])
+        && allocations[index].user_id is string
+        && allocations[index].user_id.size() > 0
+        && validMoney(allocations[index].amount)
+        && exists(memberPath(roomId, allocations[index].user_id))
+        && get(memberPath(roomId, allocations[index].user_id)).data.is_active == true
+      );
+    }
+    function allocationsHaveUniqueIds(allocations) {
+      return (allocations.size() < 2 || allocations[0].user_id != allocations[1].user_id)
+        && (allocations.size() < 3 || (allocations[0].user_id != allocations[2].user_id && allocations[1].user_id != allocations[2].user_id))
+        && (allocations.size() < 4 || (allocations[0].user_id != allocations[3].user_id && allocations[1].user_id != allocations[3].user_id && allocations[2].user_id != allocations[3].user_id))
+        && (allocations.size() < 5 || (allocations[0].user_id != allocations[4].user_id && allocations[1].user_id != allocations[4].user_id && allocations[2].user_id != allocations[4].user_id && allocations[3].user_id != allocations[4].user_id))
+        && (allocations.size() < 6 || (allocations[0].user_id != allocations[5].user_id && allocations[1].user_id != allocations[5].user_id && allocations[2].user_id != allocations[5].user_id && allocations[3].user_id != allocations[5].user_id && allocations[4].user_id != allocations[5].user_id));
+    }
+    function sumAllocationAmounts(allocations) {
+      return allocations[0].amount
+        + (allocations.size() > 1 ? allocations[1].amount : 0)
+        + (allocations.size() > 2 ? allocations[2].amount : 0)
+        + (allocations.size() > 3 ? allocations[3].amount : 0)
+        + (allocations.size() > 4 ? allocations[4].amount : 0)
+        + (allocations.size() > 5 ? allocations[5].amount : 0);
+    }
+    function validPaymentAllocationList(roomId, allocations, total) {
+      return allocations is list && allocations.size() > 0 && allocations.size() <= 6
+        && validAllocationAt(roomId, allocations, 0)
+        && validAllocationAt(roomId, allocations, 1)
+        && validAllocationAt(roomId, allocations, 2)
+        && validAllocationAt(roomId, allocations, 3)
+        && validAllocationAt(roomId, allocations, 4)
+        && validAllocationAt(roomId, allocations, 5)
+        && allocationsHaveUniqueIds(allocations)
+        && sumAllocationAmounts(allocations) > total - 0.001
+        && sumAllocationAmounts(allocations) < total + 0.001;
+    }
     function validPaymentData(roomId, paymentId, data) {
       return data.keys().hasAll(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at'])
-        && data.keys().hasOnly(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at'])
+        && data.keys().hasOnly(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at', 'allocations'])
         && data.id == paymentId
         && data.room_id == roomId
         && validMoney(data.amount)
@@ -222,7 +261,8 @@ service cloud.firestore {
         && dateBelongsToMonth(data.payment_date, data.month_key)
         && data.note is string && data.note.size() <= 500
         && data.is_deleted is bool
-        && data.created_at is string && data.updated_at is string;
+        && data.created_at is string && data.updated_at is string
+        && (!data.keys().hasAny(['allocations']) || validPaymentAllocationList(roomId, data.allocations, data.amount));
     }
     function validReimbursementData(roomId, reimbursementId, data) {
       return data.keys().hasAll(['id', 'room_id', 'from_member', 'to_member', 'amount', 'payment_date', 'note', 'recorded_by', 'is_deleted', 'created_at'])
