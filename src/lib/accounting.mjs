@@ -51,6 +51,27 @@ export function splitEqually(total, participantIds) {
   }));
 }
 
+export function maximumCanteenPayment(roomDebt, existingPaymentAmount = 0) {
+  const availableCents = moneyToCents(roomDebt) + moneyToCents(existingPaymentAmount);
+  return centsToMoney(Math.max(0, availableCents));
+}
+
+export function validateCanteenPayment({ roomDebt, amount, existingPaymentAmount = 0 }) {
+  const paymentCents = moneyToCents(amount);
+  if (paymentCents <= 0) {
+    throw new RangeError('The canteen payment must be at least Rs. 0.01.');
+  }
+
+  const maximumCents = moneyToCents(maximumCanteenPayment(roomDebt, existingPaymentAmount));
+  if (paymentCents > maximumCents) {
+    throw new RangeError(
+      `The room only owes Rs. ${centsToMoney(maximumCents).toFixed(2)}. A payment cannot be higher than the outstanding canteen balance.`
+    );
+  }
+
+  return centsToMoney(paymentCents);
+}
+
 export function calculateRoomAccounting({ expenses = EMPTY_LIST, payments = EMPTY_LIST, reimbursements = EMPTY_LIST, currentUserId = '', monthKey = '' }) {
   const allActiveExpenses = active(expenses);
   const allActivePayments = active(payments);
