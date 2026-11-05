@@ -36,6 +36,17 @@ export interface RoomAccountingSummary {
 }
 export function moneyToCents(value: number | string): number;
 export function centsToMoney(cents: number): number;
+export function maximumCanteenPayment(roomDebt: number, existingPaymentAmount?: number): number;
+export function validateCanteenPayment(args: {
+  roomDebt: number;
+  amount: number;
+  existingPaymentAmount?: number;
+}): number;
+export function validateExpenseBalanceChange(args: {
+  roomDebt: number;
+  previousAmount?: number;
+  nextAmount?: number;
+}): number;
 export function splitEqually(total: number, participantIds: string[]): AccountingShare[];
 export function calculateRoomAccounting(args: {
   expenses?: AccountingExpense[];
