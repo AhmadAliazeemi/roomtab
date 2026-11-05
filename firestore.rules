@@ -219,7 +219,6 @@ service cloud.firestore {
         && allocations[index].user_id.size() > 0
         && validMoney(allocations[index].amount)
         && exists(memberPath(roomId, allocations[index].user_id))
-        && get(memberPath(roomId, allocations[index].user_id)).data.is_active == true
       );
     }
     function allocationsHaveUniqueIds(allocations) {
