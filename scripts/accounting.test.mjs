@@ -178,3 +178,15 @@ test('legacy payments without allocations are distributed across outstanding roo
     { user_id: 'b', share: 400, paid: 200, outstanding: 200 }
   ]);
 });
+
+
+test('payment allocations are limited to six roommate balances', () => {
+  const memberBalances = Array.from({ length: 7 }, (_, index) => ({
+    user_id: String(index + 1), outstanding: 100
+  }));
+  assert.throws(() => calculatePaymentAllocations({
+    amount: 700,
+    selectedMemberIds: memberBalances.map(item => item.user_id),
+    memberBalances
+  }), /up to 6 roommates/i);
+});
