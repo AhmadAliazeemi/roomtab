@@ -320,8 +320,8 @@ test('payment allocations must cover the full amount and reference unique active
       allocations: [{ user_id: 'member', amount: 9.99 }]
     }),
     samplePayment({
-      id: 'allocation-inactive-member',
-      allocations: [{ user_id: 'inactive', amount: 10 }]
+      id: 'allocation-unknown-member',
+      allocations: [{ user_id: 'not-in-this-room', amount: 10 }]
     }),
     samplePayment({
       id: 'allocation-duplicate-member',
