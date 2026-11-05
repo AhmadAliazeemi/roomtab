@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateRoomAccounting,
+  calculateMemberBalances,
+  calculatePaymentAllocations,
   makeMonthClosingSnapshot,
   moneyToCents,
   maximumCanteenPayment,
@@ -129,4 +131,50 @@ test('meal corrections and deletions cannot make recorded canteen payments excee
     () => validateExpenseBalanceChange({ roomDebt: 100, previousAmount: 300, nextAmount: 100 }),
     /correct the canteen payment first/i
   );
+});
+
+test('canteen payment allocation reduces the selected roommates debts, not the physical payer balance', () => {
+  const expenses = [{ total_amount: 1000, shares: [{ user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }] }];
+  const payments = [{ amount: 400, paid_by: 'a', allocations: [{ user_id: 'b', amount: 400 }] }];
+  const a = calculateRoomAccounting({ expenses, payments, currentUserId: 'a' });
+  const b = calculateRoomAccounting({ expenses, payments, currentUserId: 'b' });
+  assert.equal(a.roomDebt, 600);
+  assert.equal(a.ownNet, 600);
+  assert.equal(a.ownPaid, 0);
+  assert.equal(b.ownNet, 0);
+  assert.equal(b.ownPaid, 400);
+});
+
+test('full payment allocation settles each selected roommate by their exact outstanding debt', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 600 }, { user_id: 'b', outstanding: 400 }, { user_id: 'c', outstanding: 300 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 1300, selectedMemberIds: ['a', 'b', 'c'], memberBalances }), [
+    { user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }, { user_id: 'c', amount: 300 }
+  ]);
+});
+
+test('partial payments are distributed proportionally across selected roommates debts', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 600 }, { user_id: 'b', outstanding: 400 }, { user_id: 'c', outstanding: 300 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 500, selectedMemberIds: ['a', 'b'], memberBalances }), [
+    { user_id: 'a', amount: 300 }, { user_id: 'b', amount: 200 }
+  ]);
+});
+
+test('partial allocation distributes remaining cents deterministically and rejects excess', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 1 }, { user_id: 'b', outstanding: 1 }, { user_id: 'c', outstanding: 1 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 1, selectedMemberIds: ['c', 'b', 'a'], memberBalances }), [
+    { user_id: 'a', amount: 0.34 }, { user_id: 'b', amount: 0.33 }, { user_id: 'c', amount: 0.33 }
+  ]);
+  assert.throws(() => calculatePaymentAllocations({ amount: 301, selectedMemberIds: ['a', 'b'], memberBalances }), /select more roommates or reduce the payment/i);
+  assert.throws(() => calculatePaymentAllocations({ amount: 1, selectedMemberIds: [], memberBalances }), /select at least one roommate/i);
+});
+
+test('legacy payments without allocations are distributed across outstanding roommate debts', () => {
+  const result = calculateMemberBalances({
+    expenses: [{ total_amount: 1000, shares: [{ user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }] }],
+    payments: [{ amount: 500, paid_by: 'a' }]
+  });
+  assert.deepEqual(result, [
+    { user_id: 'a', share: 600, paid: 300, outstanding: 300 },
+    { user_id: 'b', share: 400, paid: 200, outstanding: 200 }
+  ]);
 });
