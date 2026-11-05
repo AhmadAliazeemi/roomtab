@@ -6,6 +6,7 @@ import {
   moneyToCents,
   maximumCanteenPayment,
   validateCanteenPayment,
+  validateExpenseBalanceChange,
   splitEqually
 } from '../src/lib/accounting.mjs';
 
@@ -113,5 +114,19 @@ test('no new canteen payment is allowed when the room is already settled', () =>
   assert.throws(
     () => validateCanteenPayment({ roomDebt: 0, amount: 0.01 }),
     /only owes Rs\. 0\.00/i
+  );
+});
+
+
+test('meal corrections and deletions cannot make recorded canteen payments exceed food expenses', () => {
+  assert.equal(validateExpenseBalanceChange({ roomDebt: 500, previousAmount: 200, nextAmount: 100 }), 400);
+  assert.equal(validateExpenseBalanceChange({ roomDebt: 500, previousAmount: 500, nextAmount: 0 }), 0);
+  assert.throws(
+    () => validateExpenseBalanceChange({ roomDebt: 100, previousAmount: 200, nextAmount: 0 }),
+    /correct the canteen payment first/i
+  );
+  assert.throws(
+    () => validateExpenseBalanceChange({ roomDebt: 100, previousAmount: 300, nextAmount: 100 }),
+    /correct the canteen payment first/i
   );
 });
