@@ -2,8 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateRoomAccounting,
+  calculateMemberBalances,
+  calculatePaymentAllocations,
   makeMonthClosingSnapshot,
   moneyToCents,
+  maximumCanteenPayment,
+  validateCanteenPayment,
+  validateExpenseBalanceChange,
   splitEqually
 } from '../src/lib/accounting.mjs';
 
@@ -54,10 +59,10 @@ test('room debt is expenses minus canteen payments; reimbursements do not change
   assert.equal(a.thisMonthPayments, 300);
   assert.equal(a.ownShare, 750);
   assert.equal(a.ownSent, 100);
-  assert.equal(a.ownNet, 650);
-  assert.equal(b.ownPaid, 400);
+  assert.equal(a.ownNet, 550);
+  assert.equal(b.ownPaid, 200);
   assert.equal(b.ownReceived, 100);
-  assert.equal(b.ownNet, 450);
+  assert.equal(b.ownNet, 550);
 });
 
 test('month close snapshot separates monthly activity from carried room debt and ignores deleted entries', () => {
@@ -83,4 +88,105 @@ test('month close snapshot separates monthly activity from carried room debt and
     monthly_net: 200,
     remaining: 1100
   });
+});
+
+
+test('canteen payments allow partial and exact payments but reject amounts above the room balance', () => {
+  assert.equal(maximumCanteenPayment(2000), 2000);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 500 }), 500);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 2000 }), 2000);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 2000, amount: 2000.01 }),
+    /cannot be higher than the outstanding canteen balance/i
+  );
+});
+
+test('editing a canteen payment can replace its existing amount without creating extra room debt', () => {
+  assert.equal(maximumCanteenPayment(2000, 700), 2700);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 2700, existingPaymentAmount: 700 }), 2700);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 2000, amount: 2700.01, existingPaymentAmount: 700 }),
+    /cannot be higher than the outstanding canteen balance/i
+  );
+});
+
+test('no new canteen payment is allowed when the room is already settled', () => {
+  assert.equal(maximumCanteenPayment(0), 0);
+  assert.equal(maximumCanteenPayment(-50), 0);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 0, amount: 0.01 }),
+    /only owes Rs\. 0\.00/i
+  );
+});
+
+
+test('meal corrections and deletions cannot make recorded canteen payments exceed food expenses', () => {
+  assert.equal(validateExpenseBalanceChange({ roomDebt: 500, previousAmount: 200, nextAmount: 100 }), 400);
+  assert.equal(validateExpenseBalanceChange({ roomDebt: 500, previousAmount: 500, nextAmount: 0 }), 0);
+  assert.throws(
+    () => validateExpenseBalanceChange({ roomDebt: 100, previousAmount: 200, nextAmount: 0 }),
+    /correct the canteen payment first/i
+  );
+  assert.throws(
+    () => validateExpenseBalanceChange({ roomDebt: 100, previousAmount: 300, nextAmount: 100 }),
+    /correct the canteen payment first/i
+  );
+});
+
+test('canteen payment allocation reduces the selected roommates debts, not the physical payer balance', () => {
+  const expenses = [{ total_amount: 1000, shares: [{ user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }] }];
+  const payments = [{ amount: 400, paid_by: 'a', allocations: [{ user_id: 'b', amount: 400 }] }];
+  const a = calculateRoomAccounting({ expenses, payments, currentUserId: 'a' });
+  const b = calculateRoomAccounting({ expenses, payments, currentUserId: 'b' });
+  assert.equal(a.roomDebt, 600);
+  assert.equal(a.ownNet, 600);
+  assert.equal(a.ownPaid, 0);
+  assert.equal(b.ownNet, 0);
+  assert.equal(b.ownPaid, 400);
+});
+
+test('full payment allocation settles each selected roommate by their exact outstanding debt', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 600 }, { user_id: 'b', outstanding: 400 }, { user_id: 'c', outstanding: 300 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 1300, selectedMemberIds: ['a', 'b', 'c'], memberBalances }), [
+    { user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }, { user_id: 'c', amount: 300 }
+  ]);
+});
+
+test('partial payments are distributed proportionally across selected roommates debts', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 600 }, { user_id: 'b', outstanding: 400 }, { user_id: 'c', outstanding: 300 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 500, selectedMemberIds: ['a', 'b'], memberBalances }), [
+    { user_id: 'a', amount: 300 }, { user_id: 'b', amount: 200 }
+  ]);
+});
+
+test('partial allocation distributes remaining cents deterministically and rejects excess', () => {
+  const memberBalances = [{ user_id: 'a', outstanding: 1 }, { user_id: 'b', outstanding: 1 }, { user_id: 'c', outstanding: 1 }];
+  assert.deepEqual(calculatePaymentAllocations({ amount: 1, selectedMemberIds: ['c', 'b', 'a'], memberBalances }), [
+    { user_id: 'a', amount: 0.34 }, { user_id: 'b', amount: 0.33 }, { user_id: 'c', amount: 0.33 }
+  ]);
+  assert.throws(() => calculatePaymentAllocations({ amount: 301, selectedMemberIds: ['a', 'b'], memberBalances }), /select more roommates or reduce the payment/i);
+  assert.throws(() => calculatePaymentAllocations({ amount: 1, selectedMemberIds: [], memberBalances }), /select at least one roommate/i);
+});
+
+test('legacy payments without allocations are distributed across outstanding roommate debts', () => {
+  const result = calculateMemberBalances({
+    expenses: [{ total_amount: 1000, shares: [{ user_id: 'a', amount: 600 }, { user_id: 'b', amount: 400 }] }],
+    payments: [{ amount: 500, paid_by: 'a' }]
+  });
+  assert.deepEqual(result, [
+    { user_id: 'a', share: 600, paid: 300, outstanding: 300 },
+    { user_id: 'b', share: 400, paid: 200, outstanding: 200 }
+  ]);
+});
+
+
+test('payment allocations are limited to six roommate balances', () => {
+  const memberBalances = Array.from({ length: 7 }, (_, index) => ({
+    user_id: String(index + 1), outstanding: 100
+  }));
+  assert.throws(() => calculatePaymentAllocations({
+    amount: 700,
+    selectedMemberIds: memberBalances.map(item => item.user_id),
+    memberBalances
+  }), /up to 6 roommates/i);
 });

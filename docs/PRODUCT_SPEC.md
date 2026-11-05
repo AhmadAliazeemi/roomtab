@@ -11,7 +11,7 @@ Replace the handwritten hostel canteen notebook with a minimalist shared ledger 
 - Shared meals: all active room members selected by default; recorder deselects people who did not eat. Split equally by default; support individual expense and custom shares.
 - Timing: save meals immediately; new meal entries can be backdated up to seven days, while actual creation time is preserved.
 - Expenses: members may correct their own entries; change/deletion is recorded in activity history.
-- Canteen debt: one combined balance for the room. Record each canteen payment amount, date, payer, and recorder. Full payment credits the person who paid; overpayments can produce a personal credit.
+- Canteen debt: one combined balance for the room, plus a calculated outstanding amount for each roommate. Each canteen payment records its amount, date, physical payer, recorder, and the roommates whose debts it settles. Selecting roommates in full automatically uses each selected roommate's current outstanding debt; a manually entered partial payment is allocated proportionally across the selected roommates' outstanding debts. A payment cannot exceed the selected roommates' combined debt or the room's total outstanding amount. The app does not create a personal overpayment credit.
 - Reimbursements: optional per-room setting, kept distinct from canteen payments.
 - Payment corrections: allowed to the original recorder or room admin; changes remain in the activity history.
 - Months: room admin reviews and closes the month; old monthly records remain separate; unpaid balances carry forward overall. Corrections after closing require reopening by admin and an activity record.
@@ -23,14 +23,15 @@ Replace the handwritten hostel canteen notebook with a minimalist shared ledger 
 1. User signs up/signs in, creates a room or joins by invitation.
 2. Member records a shared meal, personal meal or custom split.
 3. Roommates see the shared ledger and their calculated shares.
-4. Any room member records a canteen payment and names the payer.
-5. The dashboard derives room debt and individual net balances from meal shares, canteen payments, and optional reimbursements.
+4. Any room member records a canteen payment, names the physical payer, and selects whose canteen debts the payment settles.
+5. The dashboard derives room debt and each roommate's remaining canteen debt from meal shares and payment allocations.
 6. Admin reviews and closes a month. A later correction requires reopening and leaves an audit entry.
 
 ## Core calculations
 - Room canteen balance = sum of non-deleted food expenses − sum of non-deleted canteen payments.
-- Personal net balance = personal meal shares − canteen payments made by that person + reimbursements received − reimbursements sent.
-- Positive personal net means still owed/contributed less than their share; negative personal net means credit.
+- Personal canteen debt = personal meal shares − canteen payments allocated to that roommate. The physical payer and the debt beneficiaries are stored separately; paying the canteen does not automatically reduce the payer's own debt.
+- A full settlement allocates exactly each selected roommate's outstanding debt. A partial payment is distributed proportionally across the selected roommates' outstanding balances, with cent-level rounding preserved.
+- Historical payments without explicit allocations are distributed proportionally across the remaining roommate debts so older rooms keep a consistent room-wide balance while new payments use explicit allocations.
 - Roommate reimbursements never reduce the room's canteen debt again.
 - Equal splits are calculated in cents so individual shares add up exactly to the recorded total.
 

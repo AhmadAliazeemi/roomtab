@@ -102,6 +102,84 @@ function sampleLog({ action, entityType, entityId, actorId = 'member', beforeDat
   };
 }
 
+async function enableMealConfirmation() {
+  await env.withSecurityRulesDisabled(async context => {
+    await updateDoc(doc(context.firestore(), 'rooms', 'room1'), { require_meal_confirmation: true });
+  });
+}
+
+function sampleConfirmationExpense(overrides = {}) {
+  return sampleExpense({
+    id: 'confirmation-meal',
+    shares: [{ user_id: 'member', amount: 5 }, { user_id: 'other', amount: 5 }],
+    confirmation_required: true,
+    confirmation_version: 1,
+    confirmation_round_id: 'round-v1',
+    ...overrides
+  });
+}
+
+function sampleConfirmationRound(expense, overrides = {}) {
+  return {
+    id: expense.confirmation_round_id,
+    room_id: 'room1',
+    expense_id: expense.id,
+    version: expense.confirmation_version,
+    created_by: expense.created_by,
+    created_at: timestamp,
+    total_amount: expense.total_amount,
+    meal_date: expense.meal_date,
+    shares: expense.shares,
+    ...overrides
+  };
+}
+
+async function writeConfirmationMeal(expense, responseOverrides = {}) {
+  const db = env.authenticatedContext(expense.created_by).firestore();
+  const round = sampleConfirmationRound(expense);
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id), expense);
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', round.id), round);
+  for (const share of expense.shares) {
+    const isCreator = share.user_id === expense.created_by;
+    const response = {
+      room_id: 'room1',
+      expense_id: expense.id,
+      round_id: round.id,
+      version: round.version,
+      user_id: share.user_id,
+      requested_by: expense.created_by,
+      status: isCreator ? 'approved' : 'pending',
+      dispute_reason: '',
+      created_at: timestamp,
+      responded_at: isCreator ? timestamp : null,
+      responded_by: isCreator ? expense.created_by : null,
+      ...(responseOverrides[share.user_id] || {})
+    };
+    batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', round.id, 'responses', share.user_id), response);
+    if (isCreator) {
+      const activityId = `meal-confirmation-${round.id}-${share.user_id}`;
+      batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+        actorId: expense.created_by,
+        action: 'meal.confirmation_approved',
+        entityType: 'meal_confirmation',
+        entityId: activityId,
+        beforeData: null,
+        afterData: response,
+        detail: 'Confirmed own participation in meal'
+      }));
+    }
+  }
+  batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    actorId: expense.created_by,
+    action: 'expense.created',
+    entityType: 'expense',
+    entityId: expense.id,
+    afterData: expense
+  }));
+  return batch.commit();
+}
+
 async function setExpenseAndLog(expense, actorId = 'member', action = 'expense.created') {
   const db = env.authenticatedContext(actorId).firestore();
   const batch = writeBatch(db);
@@ -215,6 +293,73 @@ test('a payment and matching audit record save together; inactive payers are rej
   await assertFails(badBatch.commit());
 });
 
+
+test('payment allocations must cover the full amount and reference unique room members', async () => {
+  const db = env.authenticatedContext('member').firestore();
+  const valid = samplePayment({
+    id: 'allocated-payment',
+    amount: 10,
+    allocations: [
+      { user_id: 'member', amount: 4 },
+      { user_id: 'other', amount: 6 }
+    ]
+  });
+  const validBatch = writeBatch(db);
+  validBatch.set(doc(db, 'rooms', 'room1', 'payments', valid.id), valid);
+  validBatch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    action: 'payment.recorded',
+    entityType: 'canteen_payment',
+    entityId: valid.id,
+    afterData: valid
+  }));
+  await assertSucceeds(validBatch.commit());
+
+  const formerRoommatePayment = samplePayment({
+    id: 'allocated-to-former-roommate',
+    amount: 10,
+    allocations: [{ user_id: 'inactive', amount: 10 }]
+  });
+  const formerRoommateBatch = writeBatch(db);
+  formerRoommateBatch.set(doc(db, 'rooms', 'room1', 'payments', formerRoommatePayment.id), formerRoommatePayment);
+  formerRoommateBatch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    action: 'payment.recorded',
+    entityType: 'canteen_payment',
+    entityId: formerRoommatePayment.id,
+    afterData: formerRoommatePayment
+  }));
+  await assertSucceeds(formerRoommateBatch.commit());
+
+  const invalidCases = [
+    samplePayment({
+      id: 'allocation-total-mismatch',
+      allocations: [{ user_id: 'member', amount: 9.99 }]
+    }),
+    samplePayment({
+      id: 'allocation-unknown-member',
+      allocations: [{ user_id: 'not-in-this-room', amount: 10 }]
+    }),
+    samplePayment({
+      id: 'allocation-duplicate-member',
+      allocations: [
+        { user_id: 'member', amount: 5 },
+        { user_id: 'member', amount: 5 }
+      ]
+    })
+  ];
+
+  for (const payment of invalidCases) {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'rooms', 'room1', 'payments', payment.id), payment);
+    batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+      action: 'payment.recorded',
+      entityType: 'canteen_payment',
+      entityId: payment.id,
+      afterData: payment
+    }));
+    await assertFails(batch.commit());
+  }
+});
+
 test('activity logs cannot be fabricated without the matching financial change', async () => {
   const db = env.authenticatedContext('member').firestore();
   const existing = (await getDoc(doc(db, 'rooms', 'room1', 'expenses', 'existing-expense'))).data();
@@ -288,6 +433,293 @@ test('room creation is one authorized batch including its creation audit record'
     after_data: { name: 'Study Room' }, detail: 'Created room Study Room', created_at: timestamp
   });
   await assertSucceeds(batch.commit());
+});
+
+
+test('meal confirmation must be enabled by the room and is only an admin setting', async () => {
+  const memberDb = env.authenticatedContext('member').firestore();
+  const memberBatch = writeBatch(memberDb);
+  memberBatch.update(doc(memberDb, 'rooms', 'room1'), { require_meal_confirmation: true });
+  memberBatch.set(doc(memberDb, 'rooms', 'room1', 'activity', 'member-enabled-confirmation'), sampleLog({
+    actorId: 'member',
+    action: 'room.meal_confirmation_setting_changed',
+    entityType: 'room',
+    entityId: 'room1',
+    beforeData: false,
+    afterData: true
+  }));
+  await assertFails(memberBatch.commit());
+
+  const adminDb = env.authenticatedContext('admin').firestore();
+  const adminBatch = writeBatch(adminDb);
+  adminBatch.update(doc(adminDb, 'rooms', 'room1'), { require_meal_confirmation: true });
+  adminBatch.set(doc(adminDb, 'rooms', 'room1', 'activity', 'admin-enabled-confirmation'), sampleLog({
+    actorId: 'admin',
+    action: 'room.meal_confirmation_setting_changed',
+    entityType: 'room',
+    entityId: 'room1',
+    beforeData: false,
+    afterData: true
+  }));
+  await assertSucceeds(adminBatch.commit());
+});
+
+test('a room requiring meal confirmation rejects an expense without a matching immutable round', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense({ id: 'missing-confirmation-round' });
+  await assertFails(setExpenseAndLog(expense));
+});
+
+test('a meal and its confirmation round are created atomically with creator approval and other participants pending', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const creatorResponse = await assertSucceeds(getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'member')));
+  const otherResponse = await assertSucceeds(getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other')));
+  assert.equal(creatorResponse.data().status, 'approved');
+  assert.equal(otherResponse.data().status, 'pending');
+});
+
+test('a meal creator cannot create an approval on behalf of another selected roommate', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertFails(writeConfirmationMeal(expense, {
+    other: {
+      status: 'approved',
+      responded_at: timestamp,
+      responded_by: 'member',
+      dispute_reason: ''
+    }
+  }));
+});
+
+test('only the selected participant can approve their own pending response with an audit event', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const before = (await getDoc(responseRef)).data();
+  const after = {
+    ...before,
+    status: 'approved',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  };
+  const activityId = 'meal-confirmation-round-v1-other';
+  const batch = writeBatch(db);
+  batch.update(responseRef, {
+    status: 'approved',
+    responded_at: after.responded_at,
+    responded_by: 'other',
+    dispute_reason: ''
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_approved',
+    entityType: 'meal_confirmation',
+    entityId: activityId,
+    beforeData: before,
+    afterData: after,
+    detail: 'Confirmed participation in meal'
+  }));
+  await assertSucceeds(batch.commit());
+});
+
+
+test('a selected participant can dispute their own share and the reason is audited', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const before = (await getDoc(responseRef)).data();
+  const after = {
+    ...before,
+    status: 'disputed',
+    dispute_reason: 'I was not present for this meal.',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other'
+  };
+  const activityId = 'meal-confirmation-round-v1-other';
+  const batch = writeBatch(db);
+  batch.update(responseRef, {
+    status: 'disputed',
+    dispute_reason: after.dispute_reason,
+    responded_at: after.responded_at,
+    responded_by: 'other'
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_disputed',
+    entityType: 'meal_confirmation',
+    entityId: activityId,
+    beforeData: before,
+    afterData: after,
+    detail: 'Disputed participation in meal'
+  }));
+  await assertSucceeds(batch.commit());
+  const saved = await getDoc(responseRef);
+  assert.equal(saved.data().status, 'disputed');
+  assert.equal(saved.data().dispute_reason, 'I was not present for this meal.');
+});
+
+test('a participant cannot approve or dispute without an atomic audit record', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('other').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  await assertFails(updateDoc(responseRef, {
+    status: 'approved',
+    responded_at: '2026-10-28T12:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  }));
+});
+
+test('a material meal correction creates a new confirmation round and preserves the old one', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense({ shares: [{ user_id: 'member', amount: 10 }] });
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('member').firestore();
+  const expenseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id);
+  const before = (await getDoc(expenseRef)).data();
+  const now = '2026-10-28T13:00:00.000Z';
+  const updated = {
+    ...before,
+    total_amount: 12,
+    updated_at: now,
+    confirmation_version: 2,
+    confirmation_round_id: 'round-v2',
+    shares: [{ user_id: 'member', amount: 12 }]
+  };
+  const round = sampleConfirmationRound(updated, {
+    id: 'round-v2',
+    version: 2,
+    created_at: now
+  });
+  const batch = writeBatch(db);
+  batch.update(expenseRef, {
+    total_amount: updated.total_amount,
+    updated_at: now,
+    confirmation_version: 2,
+    confirmation_round_id: 'round-v2',
+    shares: updated.shares
+  });
+  batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2'), round);
+  for (const share of updated.shares) {
+    const isCreator = share.user_id === 'member';
+    const response = {
+      room_id: 'room1',
+      expense_id: expense.id,
+      round_id: 'round-v2',
+      version: 2,
+      user_id: share.user_id,
+      requested_by: 'member',
+      status: isCreator ? 'approved' : 'pending',
+      dispute_reason: '',
+      created_at: now,
+      responded_at: isCreator ? now : null,
+      responded_by: isCreator ? 'member' : null
+    };
+    batch.set(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2', 'responses', share.user_id), response);
+    if (isCreator) {
+      const activityId = 'meal-confirmation-round-v2-member';
+      batch.set(doc(db, 'rooms', 'room1', 'activity', activityId), sampleLog({
+        actorId: 'member',
+        action: 'meal.confirmation_approved',
+        entityType: 'meal_confirmation',
+        entityId: activityId,
+        beforeData: null,
+        afterData: response,
+        detail: 'Confirmed own participation in corrected meal'
+      }));
+    }
+  }
+  batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    actorId: 'member',
+    action: 'expense.updated',
+    entityType: 'expense',
+    entityId: expense.id,
+    beforeData: before,
+    afterData: updated,
+    detail: 'Corrected meal amount and shares'
+  }));
+  await assertSucceeds(batch.commit());
+
+  const oldRound = await getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1'));
+  const newRound = await getDoc(doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v2'));
+  assert.equal(oldRound.exists(), true);
+  assert.equal(newRound.data().total_amount, 12);
+  assert.equal(newRound.data().version, 2);
+
+  const otherDb = env.authenticatedContext('other').firestore();
+  const oldResponseRef = doc(otherDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'other');
+  const oldResponse = (await getDoc(oldResponseRef)).data();
+  const lateApproval = {
+    ...oldResponse,
+    status: 'approved',
+    responded_at: '2026-10-28T13:30:00.000Z',
+    responded_by: 'other',
+    dispute_reason: ''
+  };
+  const lateBatch = writeBatch(otherDb);
+  lateBatch.update(oldResponseRef, {
+    status: 'approved',
+    responded_at: lateApproval.responded_at,
+    responded_by: 'other',
+    dispute_reason: ''
+  });
+  const oldActivityId = 'meal-confirmation-round-v1-other';
+  lateBatch.set(doc(otherDb, 'rooms', 'room1', 'activity', oldActivityId), sampleLog({
+    actorId: 'other',
+    action: 'meal.confirmation_approved',
+    entityType: 'meal_confirmation',
+    entityId: oldActivityId,
+    beforeData: oldResponse,
+    afterData: lateApproval,
+    detail: 'Late approval for superseded meal version'
+  }));
+  await assertFails(lateBatch.commit());
+});
+
+test('a roommate not selected for a meal cannot create or change a confirmation response', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense({
+    id: 'meal-without-admin',
+    shares: [{ user_id: 'member', amount: 10 }]
+  });
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const db = env.authenticatedContext('admin').firestore();
+  const responseRef = doc(db, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1', 'responses', 'admin');
+  await assertFails(setDoc(responseRef, {
+    room_id: 'room1', expense_id: expense.id, round_id: 'round-v1', version: 1,
+    user_id: 'admin', requested_by: 'member', status: 'approved',
+    dispute_reason: '', created_at: timestamp, responded_at: timestamp, responded_by: 'admin'
+  }));
+});
+
+test('confirmation rounds are immutable and only active room members can read them', async () => {
+  await enableMealConfirmation();
+  const expense = sampleConfirmationExpense();
+  await assertSucceeds(writeConfirmationMeal(expense));
+
+  const memberDb = env.authenticatedContext('other').firestore();
+  await assertFails(updateDoc(doc(memberDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1'), {
+    total_amount: 999
+  }));
+
+  const strangerDb = env.authenticatedContext('stranger').firestore();
+  await assertFails(getDoc(doc(strangerDb, 'rooms', 'room1', 'expenses', expense.id, 'confirmationRounds', 'round-v1')));
 });
 
 test('only admins can close a month', async () => {

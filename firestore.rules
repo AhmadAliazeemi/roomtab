@@ -6,6 +6,66 @@ service cloud.firestore {
     function memberPath(roomId, userId) { return /databases/$(database)/documents/rooms/$(roomId)/members/$(userId); }
     function invitePath(code) { return /databases/$(database)/documents/inviteCodes/$(code); }
     function closingPath(roomId, monthKey) { return /databases/$(database)/documents/rooms/$(roomId)/closings/$(monthKey); }
+    function expensePath(roomId, expenseId) { return /databases/$(database)/documents/rooms/$(roomId)/expenses/$(expenseId); }
+    function confirmationRoundPath(roomId, expenseId, roundId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/expenses/$(expenseId)/confirmationRounds/$(roundId);
+    }
+    function confirmationResponsePath(roomId, expenseId, roundId, memberId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/expenses/$(expenseId)/confirmationRounds/$(roundId)/responses/$(memberId);
+    }
+    function confirmationResponseActivityPath(roomId, roundId, memberId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/activity/$("meal-confirmation-" + roundId + "-" + memberId);
+    }
+    function confirmationResponseCreateHasAudit(roomId, roundId, memberId, responseData) {
+      let path = confirmationResponseActivityPath(roomId, roundId, memberId);
+      return existsAfter(path)
+        && getAfter(path).data.actor_id == request.auth.uid
+        && getAfter(path).data.after_data == responseData;
+    }
+    function isSelectedInShares(shares, memberId) {
+      return (shares.size() > 0 && shares[0].user_id == memberId)
+        || (shares.size() > 1 && shares[1].user_id == memberId)
+        || (shares.size() > 2 && shares[2].user_id == memberId)
+        || (shares.size() > 3 && shares[3].user_id == memberId)
+        || (shares.size() > 4 && shares[4].user_id == memberId)
+        || (shares.size() > 5 && shares[5].user_id == memberId);
+    }
+    function confirmationRoundMatchesExpenseAfter(roomId, expenseId, expenseData) {
+      let roundId = expenseData.confirmation_round_id;
+      let path = confirmationRoundPath(roomId, expenseId, roundId);
+      return expenseData.confirmation_required == true
+        && expenseData.confirmation_version is int
+        && expenseData.confirmation_version >= 1
+        && roundId is string && roundId.size() > 0
+        && existsAfter(path)
+        && getAfter(path).data.room_id == roomId
+        && getAfter(path).data.expense_id == expenseId
+        && getAfter(path).data.version == expenseData.confirmation_version
+        && getAfter(path).data.total_amount == expenseData.total_amount
+        && getAfter(path).data.meal_date == expenseData.meal_date
+        && getAfter(path).data.shares == expenseData.shares;
+    }
+    function confirmationCreateAllowed(roomId, expenseId, data) {
+      let enabled = get(roomPath(roomId)).data.get('require_meal_confirmation', false);
+      return (enabled == true
+          && data.confirmation_required == true
+          && data.confirmation_version == 1
+          && confirmationRoundMatchesExpenseAfter(roomId, expenseId, data))
+        || (enabled != true && data.get('confirmation_required', false) != true);
+    }
+    function confirmationUpdateAllowed(roomId, expenseId, oldData, newData) {
+      let wasRequired = oldData.get('confirmation_required', false) == true;
+      let isRequired = newData.get('confirmation_required', false) == true;
+      let materialChange = newData.diff(oldData).affectedKeys().hasAny(['total_amount', 'meal_date', 'shares']);
+      return (!wasRequired && !isRequired)
+        || (wasRequired && isRequired
+          && confirmationRoundMatchesExpenseAfter(roomId, expenseId, newData)
+          && (materialChange
+            ? newData.confirmation_version == oldData.confirmation_version + 1
+              && newData.confirmation_round_id != oldData.confirmation_round_id
+            : newData.confirmation_version == oldData.confirmation_version
+              && newData.confirmation_round_id == oldData.confirmation_round_id));
+    }
     function isRoomMember(roomId) {
       return signedIn() && exists(memberPath(roomId, request.auth.uid))
         && get(memberPath(roomId, request.auth.uid)).data.is_active == true;
@@ -80,18 +140,19 @@ service cloud.firestore {
     }
     function validRoomData(data) {
       return data.keys().hasAll(['name', 'join_code', 'admin_user_id', 'currency_code', 'track_reimbursements', 'default_split_method', 'created_at'])
-        && data.keys().hasOnly(['name', 'join_code', 'admin_user_id', 'currency_code', 'track_reimbursements', 'default_split_method', 'created_at'])
+        && data.keys().hasOnly(['name', 'join_code', 'admin_user_id', 'currency_code', 'track_reimbursements', 'default_split_method', 'created_at', 'require_meal_confirmation'])
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 60
         && data.join_code is string && data.join_code.size() >= 4 && data.join_code.size() <= 32
         && data.admin_user_id is string
         && data.currency_code is string && data.currency_code.size() == 3
         && data.track_reimbursements is bool
         && data.default_split_method in ['equal', 'custom']
-        && data.created_at is string;
+        && data.created_at is string
+        && (!data.keys().hasAny(['require_meal_confirmation']) || data.require_meal_confirmation is bool);
     }
     function validExpenseData(roomId, expenseId, data) {
       return data.keys().hasAll(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares'])
-        && data.keys().hasOnly(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares'])
+        && data.keys().hasOnly(['id', 'room_id', 'created_by', 'description', 'total_amount', 'meal_date', 'month_key', 'entry_mode', 'is_deleted', 'created_at', 'updated_at', 'shares', 'confirmation_required', 'confirmation_version', 'confirmation_round_id'])
         && data.id == expenseId
         && data.room_id == roomId
         && data.created_by is string
@@ -101,11 +162,95 @@ service cloud.firestore {
         && data.entry_mode in ['shared', 'individual', 'custom']
         && data.is_deleted is bool
         && data.created_at is string && data.updated_at is string
-        && validShareList(roomId, data.shares, data.total_amount);
+        && validShareList(roomId, data.shares, data.total_amount)
+        && (!data.keys().hasAny(['confirmation_required']) || data.confirmation_required is bool)
+        && (!data.keys().hasAny(['confirmation_version']) || (data.confirmation_version is int && data.confirmation_version >= 0))
+        && (!data.keys().hasAny(['confirmation_round_id']) || data.confirmation_round_id == null || (data.confirmation_round_id is string && data.confirmation_round_id.size() > 0))
+        && (data.get('confirmation_required', false) != true
+          || (data.confirmation_version is int && data.confirmation_version >= 1
+            && data.confirmation_round_id is string && data.confirmation_round_id.size() > 0));
+    }
+    function validConfirmationRoundData(roomId, expenseId, roundId, data) {
+      let parentPath = expensePath(roomId, expenseId);
+      return data.keys().hasAll(['id', 'room_id', 'expense_id', 'version', 'created_by', 'created_at', 'total_amount', 'meal_date', 'shares'])
+        && data.keys().hasOnly(['id', 'room_id', 'expense_id', 'version', 'created_by', 'created_at', 'total_amount', 'meal_date', 'shares'])
+        && data.id == roundId
+        && data.room_id == roomId
+        && data.expense_id == expenseId
+        && data.version is int && data.version >= 1
+        && data.created_by == request.auth.uid
+        && data.created_at is string
+        && existsAfter(parentPath)
+        && (!exists(parentPath) || get(parentPath).data.confirmation_round_id != roundId)
+        && getAfter(parentPath).data.confirmation_required == true
+        && getAfter(parentPath).data.confirmation_round_id == roundId
+        && getAfter(parentPath).data.confirmation_version == data.version
+        && getAfter(parentPath).data.total_amount == data.total_amount
+        && getAfter(parentPath).data.meal_date == data.meal_date
+        && getAfter(parentPath).data.shares == data.shares;
+    }
+    function validConfirmationResponseShape(roomId, expenseId, roundId, memberId, data) {
+      let roundPath = confirmationRoundPath(roomId, expenseId, roundId);
+      let parentPath = expensePath(roomId, expenseId);
+      return existsAfter(parentPath)
+        && getAfter(parentPath).data.confirmation_required == true
+        && getAfter(parentPath).data.is_deleted == false
+        && getAfter(parentPath).data.confirmation_round_id == roundId
+        && getAfter(parentPath).data.confirmation_version == getAfter(roundPath).data.version
+        && data.keys().hasAll(['room_id', 'expense_id', 'round_id', 'version', 'user_id', 'requested_by', 'status', 'dispute_reason', 'created_at', 'responded_at', 'responded_by'])
+        && data.keys().hasOnly(['room_id', 'expense_id', 'round_id', 'version', 'user_id', 'requested_by', 'status', 'dispute_reason', 'created_at', 'responded_at', 'responded_by'])
+        && data.room_id == roomId
+        && data.expense_id == expenseId
+        && data.round_id == roundId
+        && data.version == getAfter(roundPath).data.version
+        && data.user_id == memberId
+        && data.requested_by == getAfter(roundPath).data.created_by
+        && data.status in ['pending', 'approved', 'disputed']
+        && data.dispute_reason is string && data.dispute_reason.size() <= 500
+        && data.created_at == getAfter(roundPath).data.created_at
+        && isSelectedInShares(getAfter(roundPath).data.shares, memberId);
+    }
+    function validAllocationAt(roomId, allocations, index) {
+      return allocations.size() <= index || (
+        allocations[index] is map
+        && allocations[index].keys().hasAll(['user_id', 'amount'])
+        && allocations[index].keys().hasOnly(['user_id', 'amount'])
+        && allocations[index].user_id is string
+        && allocations[index].user_id.size() > 0
+        && validMoney(allocations[index].amount)
+        && exists(memberPath(roomId, allocations[index].user_id))
+      );
+    }
+    function allocationsHaveUniqueIds(allocations) {
+      return (allocations.size() < 2 || allocations[0].user_id != allocations[1].user_id)
+        && (allocations.size() < 3 || (allocations[0].user_id != allocations[2].user_id && allocations[1].user_id != allocations[2].user_id))
+        && (allocations.size() < 4 || (allocations[0].user_id != allocations[3].user_id && allocations[1].user_id != allocations[3].user_id && allocations[2].user_id != allocations[3].user_id))
+        && (allocations.size() < 5 || (allocations[0].user_id != allocations[4].user_id && allocations[1].user_id != allocations[4].user_id && allocations[2].user_id != allocations[4].user_id && allocations[3].user_id != allocations[4].user_id))
+        && (allocations.size() < 6 || (allocations[0].user_id != allocations[5].user_id && allocations[1].user_id != allocations[5].user_id && allocations[2].user_id != allocations[5].user_id && allocations[3].user_id != allocations[5].user_id && allocations[4].user_id != allocations[5].user_id));
+    }
+    function sumAllocationAmounts(allocations) {
+      return allocations[0].amount
+        + (allocations.size() > 1 ? allocations[1].amount : 0)
+        + (allocations.size() > 2 ? allocations[2].amount : 0)
+        + (allocations.size() > 3 ? allocations[3].amount : 0)
+        + (allocations.size() > 4 ? allocations[4].amount : 0)
+        + (allocations.size() > 5 ? allocations[5].amount : 0);
+    }
+    function validPaymentAllocationList(roomId, allocations, total) {
+      return allocations is list && allocations.size() > 0 && allocations.size() <= 6
+        && validAllocationAt(roomId, allocations, 0)
+        && validAllocationAt(roomId, allocations, 1)
+        && validAllocationAt(roomId, allocations, 2)
+        && validAllocationAt(roomId, allocations, 3)
+        && validAllocationAt(roomId, allocations, 4)
+        && validAllocationAt(roomId, allocations, 5)
+        && allocationsHaveUniqueIds(allocations)
+        && sumAllocationAmounts(allocations) > total - 0.001
+        && sumAllocationAmounts(allocations) < total + 0.001;
     }
     function validPaymentData(roomId, paymentId, data) {
       return data.keys().hasAll(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at'])
-        && data.keys().hasOnly(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at'])
+        && data.keys().hasOnly(['id', 'room_id', 'amount', 'paid_by', 'recorded_by', 'payment_date', 'month_key', 'note', 'is_deleted', 'created_at', 'updated_at', 'allocations'])
         && data.id == paymentId
         && data.room_id == roomId
         && validMoney(data.amount)
@@ -115,7 +260,8 @@ service cloud.firestore {
         && dateBelongsToMonth(data.payment_date, data.month_key)
         && data.note is string && data.note.size() <= 500
         && data.is_deleted is bool
-        && data.created_at is string && data.updated_at is string;
+        && data.created_at is string && data.updated_at is string
+        && (!data.keys().hasAny(['allocations']) || validPaymentAllocationList(roomId, data.allocations, data.amount));
     }
     function validReimbursementData(roomId, reimbursementId, data) {
       return data.keys().hasAll(['id', 'room_id', 'from_member', 'to_member', 'amount', 'payment_date', 'note', 'recorded_by', 'is_deleted', 'created_at'])
@@ -153,10 +299,10 @@ service cloud.firestore {
         && request.resource.data.actor_id == request.auth.uid
         && request.resource.data.action in [
           'room.created', 'room.member_joined', 'room.invite_code_regenerated',
-          'room.reimbursements_setting_changed', 'room.member_removed', 'profile.name_changed',
+          'room.reimbursements_setting_changed', 'room.meal_confirmation_setting_changed', 'room.member_removed', 'profile.name_changed',
           'expense.created', 'expense.updated', 'expense.deleted',
           'payment.recorded', 'payment.updated', 'payment.deleted',
-          'reimbursement.recorded', 'month.closed', 'month.reopened'
+          'reimbursement.recorded', 'meal.confirmation_approved', 'meal.confirmation_disputed', 'month.closed', 'month.reopened'
         ]
         && request.resource.data.entity_type is string
         && request.resource.data.entity_id is string
@@ -173,6 +319,7 @@ service cloud.firestore {
         && existsAfter(path)
         && request.resource.data.after_data == getAfter(path).data
         && getAfter(path).data.room_id == roomId
+        && (getAfter(path).data.get('confirmation_required', false) != true || confirmationRoundMatchesExpenseAfter(roomId, expenseId, getAfter(path).data))
         && (
           (action == 'expense.created' && !exists(path) && request.resource.data.before_data == null && getAfter(path).data.created_by == request.auth.uid)
           || (action == 'expense.updated' && exists(path)
@@ -276,6 +423,44 @@ service cloud.firestore {
         && get(path).data.track_reimbursements != request.resource.data.after_data
         && getAfter(path).data.track_reimbursements == request.resource.data.after_data;
     }
+    function mealConfirmationSettingActivityMatches(roomId) {
+      let path = roomPath(roomId);
+      let previous = get(path).data.get('require_meal_confirmation', false);
+      return request.resource.data.action == 'room.meal_confirmation_setting_changed'
+        && request.resource.data.entity_type == 'room'
+        && request.resource.data.entity_id == roomId
+        && request.resource.data.before_data == previous
+        && request.resource.data.after_data is bool
+        && previous != request.resource.data.after_data
+        && isRoomAdmin(roomId)
+        && getAfter(path).data.require_meal_confirmation == request.resource.data.after_data;
+    }
+    function confirmationResponseActivityMatchesData(roomId, response) {
+      let path = confirmationResponsePath(roomId, response.expense_id, response.round_id, response.user_id);
+      return request.resource.data.entity_type == 'meal_confirmation'
+        && request.resource.data.entity_id == ('meal-confirmation-' + response.round_id + '-' + response.user_id)
+        && request.resource.data.after_data == getAfter(path).data
+        && (
+          (request.resource.data.before_data is map
+            && exists(path)
+            && request.resource.data.before_data == get(path).data
+            && get(path).data.status == 'pending')
+          || (request.resource.data.before_data == null
+            && !exists(path) && existsAfter(path))
+        )
+        && request.resource.data.actor_id == response.user_id
+        && getAfter(path).data.responded_by == request.auth.uid
+        && (
+          (request.resource.data.action == 'meal.confirmation_approved' && getAfter(path).data.status == 'approved')
+          || (request.resource.data.action == 'meal.confirmation_disputed' && getAfter(path).data.status == 'disputed')
+        );
+    }
+    function confirmationResponseActivityMatches(roomId) {
+      return request.resource.data.action in ['meal.confirmation_approved', 'meal.confirmation_disputed']
+        && request.resource.data.after_data is map
+        && request.resource.data.after_data.keys().hasAll(['expense_id', 'round_id', 'user_id'])
+        && confirmationResponseActivityMatchesData(roomId, request.resource.data.after_data);
+    }
     function memberRemovedActivityMatches(roomId) {
       let memberId = request.resource.data.entity_id;
       let path = memberPath(roomId, memberId);
@@ -333,6 +518,8 @@ service cloud.firestore {
         || memberJoinedActivityMatches(roomId)
         || inviteRegeneratedActivityMatches(roomId)
         || reimbursementSettingActivityMatches(roomId)
+        || mealConfirmationSettingActivityMatches(roomId)
+        || confirmationResponseActivityMatches(roomId)
         || memberRemovedActivityMatches(roomId)
         || profileNameActivityMatches(roomId)
         || closingActivityMatches(roomId);
@@ -379,9 +566,10 @@ service cloud.firestore {
       allow get, list: if isRoomMember(roomId);
       allow update: if isRoomAdmin(roomId)
         && request.resource.data.admin_user_id == resource.data.admin_user_id
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['join_code', 'track_reimbursements'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['join_code', 'track_reimbursements', 'require_meal_confirmation'])
         && request.resource.data.join_code is string
-        && request.resource.data.track_reimbursements is bool;
+        && request.resource.data.track_reimbursements is bool
+        && (!request.resource.data.keys().hasAny(['require_meal_confirmation']) || request.resource.data.require_meal_confirmation is bool);
       allow delete: if false;
 
       match /members/{memberId} {
@@ -436,6 +624,7 @@ service cloud.firestore {
         allow create: if isRoomMember(roomId)
           && request.resource.data.created_by == request.auth.uid
           && validExpenseData(roomId, expenseId, request.resource.data)
+          && confirmationCreateAllowed(roomId, expenseId, request.resource.data)
           && monthIsOpen(roomId, request.resource.data.month_key);
         allow update: if isRoomMember(roomId)
           && resource.data.is_deleted != true
@@ -445,9 +634,63 @@ service cloud.firestore {
           && request.resource.data.created_by == resource.data.created_by
           && request.resource.data.created_at == resource.data.created_at
           && validExpenseData(roomId, expenseId, request.resource.data)
+          && confirmationUpdateAllowed(roomId, expenseId, resource.data, request.resource.data)
           && monthIsOpen(roomId, resource.data.month_key)
           && monthIsOpen(roomId, request.resource.data.month_key);
         allow delete: if false;
+
+
+        match /confirmationRounds/{roundId} {
+          allow read: if isRoomMember(roomId);
+          allow create: if isRoomMember(roomId)
+            && validConfirmationRoundData(roomId, expenseId, roundId, request.resource.data);
+          allow update, delete: if false;
+
+          match /responses/{memberId} {
+            allow read: if isRoomMember(roomId);
+            allow create: if isRoomMember(roomId)
+              && validConfirmationResponseShape(roomId, expenseId, roundId, memberId, request.resource.data)
+              && existsAfter(confirmationRoundPath(roomId, expenseId, roundId))
+              && (
+                (request.auth.uid == getAfter(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
+                  && memberId == request.auth.uid
+                  && request.resource.data.status == 'approved'
+                  && request.resource.data.responded_by == request.auth.uid
+                  && request.resource.data.responded_at is string
+                  && request.resource.data.dispute_reason == ''
+                  && confirmationResponseCreateHasAudit(roomId, roundId, memberId, request.resource.data))
+                || (request.auth.uid == getAfter(confirmationRoundPath(roomId, expenseId, roundId)).data.created_by
+                  && memberId != request.auth.uid
+                  && request.resource.data.status == 'pending'
+                  && request.resource.data.responded_by == null
+                  && request.resource.data.responded_at == null
+                  && request.resource.data.dispute_reason == '')
+                || (request.auth.uid == memberId
+                  && request.resource.data.status in ['approved', 'disputed']
+                  && request.resource.data.responded_by == request.auth.uid
+                  && request.resource.data.responded_at is string
+                  && (request.resource.data.status == 'approved'
+                    ? request.resource.data.dispute_reason == ''
+                    : request.resource.data.dispute_reason.size() > 0)
+                  && confirmationResponseCreateHasAudit(roomId, roundId, memberId, request.resource.data))
+              );
+            allow update: if isRoomMember(roomId)
+              && request.auth.uid == memberId
+              && validConfirmationResponseShape(roomId, expenseId, roundId, memberId, request.resource.data)
+              && resource.data.status == 'pending'
+              && request.resource.data.status in ['approved', 'disputed']
+              && request.resource.data.responded_by == request.auth.uid
+              && request.resource.data.responded_at is string
+              && (request.resource.data.status == 'approved'
+                ? request.resource.data.dispute_reason == ''
+                : request.resource.data.dispute_reason.size() > 0)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'dispute_reason', 'responded_at', 'responded_by'])
+              && existsAfter(confirmationResponseActivityPath(roomId, roundId, memberId))
+              && getAfter(confirmationResponseActivityPath(roomId, roundId, memberId)).data.actor_id == request.auth.uid
+              && getAfter(confirmationResponseActivityPath(roomId, roundId, memberId)).data.after_data == request.resource.data;
+            allow delete: if false;
+          }
+        }
       }
 
       match /payments/{paymentId} {
