@@ -174,6 +174,7 @@ export function calculatePaymentAllocations({ amount, selectedMemberIds, memberB
   if (selected.length === 0) {
     throw new RangeError('Select at least one roommate who still owes money to the canteen.');
   }
+  if (selected.length > 6) throw new RangeError('A payment can cover up to 6 roommates at once.');
   if (amountCents > selectedDebtCents) {
     throw new RangeError(
       'The selected roommates owe only Rs. ' + centsToMoney(selectedDebtCents).toFixed(2) + '. Select more roommates or reduce the payment amount.'
