@@ -4,6 +4,8 @@ import {
   calculateRoomAccounting,
   makeMonthClosingSnapshot,
   moneyToCents,
+  maximumCanteenPayment,
+  validateCanteenPayment,
   splitEqually
 } from '../src/lib/accounting.mjs';
 
@@ -83,4 +85,33 @@ test('month close snapshot separates monthly activity from carried room debt and
     monthly_net: 200,
     remaining: 1100
   });
+});
+
+
+test('canteen payments allow partial and exact payments but reject amounts above the room balance', () => {
+  assert.equal(maximumCanteenPayment(2000), 2000);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 500 }), 500);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 2000 }), 2000);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 2000, amount: 2000.01 }),
+    /cannot be higher than the outstanding canteen balance/i
+  );
+});
+
+test('editing a canteen payment can replace its existing amount without creating extra room debt', () => {
+  assert.equal(maximumCanteenPayment(2000, 700), 2700);
+  assert.equal(validateCanteenPayment({ roomDebt: 2000, amount: 2700, existingPaymentAmount: 700 }), 2700);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 2000, amount: 2700.01, existingPaymentAmount: 700 }),
+    /cannot be higher than the outstanding canteen balance/i
+  );
+});
+
+test('no new canteen payment is allowed when the room is already settled', () => {
+  assert.equal(maximumCanteenPayment(0), 0);
+  assert.equal(maximumCanteenPayment(-50), 0);
+  assert.throws(
+    () => validateCanteenPayment({ roomDebt: 0, amount: 0.01 }),
+    /only owes Rs\. 0\.00/i
+  );
 });
