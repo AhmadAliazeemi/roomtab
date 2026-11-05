@@ -294,7 +294,7 @@ test('a payment and matching audit record save together; inactive payers are rej
 });
 
 
-test('payment allocations must cover the full amount and reference unique active roommates', async () => {
+test('payment allocations must cover the full amount and reference unique room members', async () => {
   const db = env.authenticatedContext('member').firestore();
   const valid = samplePayment({
     id: 'allocated-payment',
@@ -313,6 +313,21 @@ test('payment allocations must cover the full amount and reference unique active
     afterData: valid
   }));
   await assertSucceeds(validBatch.commit());
+
+  const formerRoommatePayment = samplePayment({
+    id: 'allocated-to-former-roommate',
+    amount: 10,
+    allocations: [{ user_id: 'inactive', amount: 10 }]
+  });
+  const formerRoommateBatch = writeBatch(db);
+  formerRoommateBatch.set(doc(db, 'rooms', 'room1', 'payments', formerRoommatePayment.id), formerRoommatePayment);
+  formerRoommateBatch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    action: 'payment.recorded',
+    entityType: 'canteen_payment',
+    entityId: formerRoommatePayment.id,
+    afterData: formerRoommatePayment
+  }));
+  await assertSucceeds(formerRoommateBatch.commit());
 
   const invalidCases = [
     samplePayment({
