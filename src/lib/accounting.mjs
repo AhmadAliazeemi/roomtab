@@ -72,6 +72,16 @@ export function validateCanteenPayment({ roomDebt, amount, existingPaymentAmount
   return centsToMoney(paymentCents);
 }
 
+export function validateExpenseBalanceChange({ roomDebt, previousAmount = 0, nextAmount = 0 }) {
+  const nextDebtCents = moneyToCents(roomDebt) - moneyToCents(previousAmount) + moneyToCents(nextAmount);
+  if (nextDebtCents < 0) {
+    throw new RangeError(
+      'This change would make canteen payments higher than recorded food expenses. Correct the canteen payment first.'
+    );
+  }
+  return centsToMoney(nextDebtCents);
+}
+
 export function calculateRoomAccounting({ expenses = EMPTY_LIST, payments = EMPTY_LIST, reimbursements = EMPTY_LIST, currentUserId = '', monthKey = '' }) {
   const allActiveExpenses = active(expenses);
   const allActivePayments = active(payments);
