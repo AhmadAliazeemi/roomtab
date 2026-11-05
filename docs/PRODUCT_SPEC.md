@@ -11,7 +11,7 @@ Replace the handwritten hostel canteen notebook with a minimalist shared ledger 
 - Shared meals: all active room members selected by default; recorder deselects people who did not eat. Split equally by default; support individual expense and custom shares.
 - Timing: save meals immediately; new meal entries can be backdated up to seven days, while actual creation time is preserved.
 - Expenses: members may correct their own entries; change/deletion is recorded in activity history.
-- Canteen debt: one combined balance for the room. Record each canteen payment amount, date, payer, and recorder. Full payment credits the person who paid; overpayments can produce a personal credit.
+- Canteen debt: one combined balance for the room. Record each canteen payment amount, date, payer, and recorder. Partial and exact payments are allowed; a payment above the current outstanding canteen amount is rejected. The app does not create a room-level overpayment credit.
 - Reimbursements: optional per-room setting, kept distinct from canteen payments.
 - Payment corrections: allowed to the original recorder or room admin; changes remain in the activity history.
 - Months: room admin reviews and closes the month; old monthly records remain separate; unpaid balances carry forward overall. Corrections after closing require reopening by admin and an activity record.
@@ -30,7 +30,7 @@ Replace the handwritten hostel canteen notebook with a minimalist shared ledger 
 ## Core calculations
 - Room canteen balance = sum of non-deleted food expenses − sum of non-deleted canteen payments.
 - Personal net balance = personal meal shares − canteen payments made by that person + reimbursements received − reimbursements sent.
-- Positive personal net means still owed/contributed less than their share; negative personal net means credit.
+- Positive personal net means the person still owes; negative personal net means they have contributed more to the canteen than their own share. This is a contribution difference, not a canteen overpayment credit.
 - Roommate reimbursements never reduce the room's canteen debt again.
 - Equal splits are calculated in cents so individual shares add up exactly to the recorded total.
 
