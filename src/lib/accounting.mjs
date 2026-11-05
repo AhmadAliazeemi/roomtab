@@ -82,6 +82,110 @@ export function validateExpenseBalanceChange({ roomDebt, previousAmount = 0, nex
   return centsToMoney(nextDebtCents);
 }
 
+
+function distributeProportionally(totalCents, weightedItems) {
+  const validItems = weightedItems.filter(item => item.weightCents > 0);
+  const totalWeight = validItems.reduce((sum, item) => sum + item.weightCents, 0);
+  if (totalCents <= 0 || totalWeight <= 0 || validItems.length === 0) return new Map();
+
+  const allocations = validItems.map(item => {
+    const numerator = totalCents * item.weightCents;
+    const baseCents = Math.floor(numerator / totalWeight);
+    return { user_id: item.user_id, cents: baseCents, remainder: numerator % totalWeight };
+  });
+  let centsLeft = totalCents - allocations.reduce((sum, item) => sum + item.cents, 0);
+  allocations.sort((a, b) => b.remainder - a.remainder || a.user_id.localeCompare(b.user_id));
+  for (let index = 0; centsLeft > 0; index = (index + 1) % allocations.length) {
+    allocations[index].cents += 1;
+    centsLeft -= 1;
+  }
+  return new Map(allocations.filter(item => item.cents > 0).map(item => [item.user_id, item.cents]));
+}
+
+export function calculateMemberBalances({ expenses = EMPTY_LIST, payments = EMPTY_LIST } = {}) {
+  const sharesByMember = new Map();
+  for (const expense of active(expenses)) {
+    for (const share of expense.shares || EMPTY_LIST) {
+      if (!share || typeof share.user_id !== 'string' || !share.user_id) continue;
+      const cents = Number(share.amount);
+      if (!Number.isFinite(cents)) continue;
+      sharesByMember.set(share.user_id, (sharesByMember.get(share.user_id) || 0) + moneyToCents(cents));
+    }
+  }
+
+  const explicitPaidByMember = new Map();
+  let legacyPaymentCents = 0;
+  for (const payment of active(payments)) {
+    if (Array.isArray(payment.allocations) && payment.allocations.length > 0) {
+      for (const allocation of payment.allocations) {
+        if (!allocation || typeof allocation.user_id !== 'string' || !allocation.user_id) continue;
+        const value = Number(allocation.amount);
+        if (!Number.isFinite(value)) continue;
+        explicitPaidByMember.set(
+          allocation.user_id,
+          (explicitPaidByMember.get(allocation.user_id) || 0) + moneyToCents(value)
+        );
+      }
+    } else {
+      const value = Number(payment.amount);
+      if (Number.isFinite(value)) legacyPaymentCents += moneyToCents(value);
+    }
+  }
+
+  const memberIds = new Set([...sharesByMember.keys(), ...explicitPaidByMember.keys()]);
+  const remainingBeforeLegacy = [];
+  for (const user_id of memberIds) {
+    const shareCents = sharesByMember.get(user_id) || 0;
+    const explicitlyPaidCents = explicitPaidByMember.get(user_id) || 0;
+    const outstandingCents = Math.max(0, shareCents - explicitlyPaidCents);
+    if (outstandingCents > 0) remainingBeforeLegacy.push({ user_id, weightCents: outstandingCents });
+  }
+
+  const totalAvailableCents = remainingBeforeLegacy.reduce((sum, item) => sum + item.weightCents, 0);
+  const legacyToAllocateCents = Math.min(legacyPaymentCents, totalAvailableCents);
+  const legacyAllocation = distributeProportionally(legacyToAllocateCents, remainingBeforeLegacy);
+
+  return Array.from(memberIds).sort((a, b) => a.localeCompare(b)).map(user_id => {
+    const shareCents = sharesByMember.get(user_id) || 0;
+    const explicitlyPaidCents = explicitPaidByMember.get(user_id) || 0;
+    const legacyPaidCents = legacyAllocation.get(user_id) || 0;
+    const outstandingCents = Math.max(0, shareCents - explicitlyPaidCents - legacyPaidCents);
+    return {
+      user_id,
+      share: centsToMoney(shareCents),
+      paid: centsToMoney(shareCents - outstandingCents),
+      outstanding: centsToMoney(outstandingCents)
+    };
+  });
+}
+
+export function calculatePaymentAllocations({ amount, selectedMemberIds, memberBalances = EMPTY_LIST }) {
+  const amountCents = moneyToCents(amount);
+  if (amountCents <= 0) throw new RangeError('The payment must be at least Rs. 0.01.');
+  if (!Array.isArray(selectedMemberIds)) throw new TypeError('Select the roommates whose debts this payment will settle.');
+
+  const balanceById = new Map(memberBalances.map(item => [item.user_id, moneyToCents(item.outstanding || 0)]));
+  const selectedIds = Array.from(new Set(selectedMemberIds.filter(id => typeof id === 'string' && id.trim())));
+  const selected = selectedIds
+    .map(user_id => ({ user_id, weightCents: balanceById.get(user_id) || 0 }))
+    .filter(item => item.weightCents > 0);
+  const selectedDebtCents = selected.reduce((sum, item) => sum + item.weightCents, 0);
+
+  if (selected.length === 0) {
+    throw new RangeError('Select at least one roommate who still owes money to the canteen.');
+  }
+  if (amountCents > selectedDebtCents) {
+    throw new RangeError(
+      'The selected roommates owe only Rs. ' + centsToMoney(selectedDebtCents).toFixed(2) + '. Select more roommates or reduce the payment amount.'
+    );
+  }
+
+  const allocation = distributeProportionally(amountCents, selected);
+  return Array.from(allocation.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([user_id, cents]) => ({ user_id, amount: centsToMoney(cents) }));
+}
+
 export function calculateRoomAccounting({ expenses = EMPTY_LIST, payments = EMPTY_LIST, reimbursements = EMPTY_LIST, currentUserId = '', monthKey = '' }) {
   const allActiveExpenses = active(expenses);
   const allActivePayments = active(payments);
@@ -92,15 +196,10 @@ export function calculateRoomAccounting({ expenses = EMPTY_LIST, payments = EMPT
   const thisMonthExpenseCents = amountCents(allActiveExpenses.filter(item => belongsToMonth(item, monthKey, 'meal_date')), 'total_amount');
   const thisMonthPaymentCents = amountCents(allActivePayments.filter(item => belongsToMonth(item, monthKey, 'payment_date')), 'amount');
 
-  const ownShareCents = allActiveExpenses.reduce((sum, expense) => {
-    return sum + (expense.shares || EMPTY_LIST)
-      .filter(share => share?.user_id === currentUserId)
-      .reduce((shareSum, share) => {
-        const value = Number(share?.amount ?? 0);
-        return shareSum + (Number.isFinite(value) ? moneyToCents(value) : 0);
-      }, 0);
-  }, 0);
-  const ownPaidCents = amountCents(allActivePayments.filter(payment => payment.paid_by === currentUserId), 'amount');
+  const memberBalances = calculateMemberBalances({ expenses: allActiveExpenses, payments: allActivePayments });
+  const ownBalance = memberBalances.find(item => item.user_id === currentUserId);
+  const ownShareCents = ownBalance ? moneyToCents(ownBalance.share) : 0;
+  const ownPaidCents = ownBalance ? moneyToCents(ownBalance.paid) : 0;
   const ownReceivedCents = amountCents(allActiveReimbursements.filter(item => item.to_member === currentUserId), 'amount');
   const ownSentCents = amountCents(allActiveReimbursements.filter(item => item.from_member === currentUserId), 'amount');
 
@@ -110,11 +209,12 @@ export function calculateRoomAccounting({ expenses = EMPTY_LIST, payments = EMPT
     totalExpenses: centsToMoney(totalExpenseCents),
     totalPayments: centsToMoney(totalPaymentCents),
     roomDebt: centsToMoney(totalExpenseCents - totalPaymentCents),
+    memberBalances,
     ownShare: centsToMoney(ownShareCents),
     ownPaid: centsToMoney(ownPaidCents),
     ownReceived: centsToMoney(ownReceivedCents),
     ownSent: centsToMoney(ownSentCents),
-    ownNet: centsToMoney(ownShareCents - ownPaidCents + ownReceivedCents - ownSentCents)
+    ownNet: centsToMoney(ownBalance ? moneyToCents(ownBalance.outstanding) : 0)
   };
 }
 
