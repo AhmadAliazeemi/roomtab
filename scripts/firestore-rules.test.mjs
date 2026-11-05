@@ -293,6 +293,58 @@ test('a payment and matching audit record save together; inactive payers are rej
   await assertFails(badBatch.commit());
 });
 
+
+test('payment allocations must cover the full amount and reference unique active roommates', async () => {
+  const db = env.authenticatedContext('member').firestore();
+  const valid = samplePayment({
+    id: 'allocated-payment',
+    amount: 10,
+    allocations: [
+      { user_id: 'member', amount: 4 },
+      { user_id: 'other', amount: 6 }
+    ]
+  });
+  const validBatch = writeBatch(db);
+  validBatch.set(doc(db, 'rooms', 'room1', 'payments', valid.id), valid);
+  validBatch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+    action: 'payment.recorded',
+    entityType: 'canteen_payment',
+    entityId: valid.id,
+    afterData: valid
+  }));
+  await assertSucceeds(validBatch.commit());
+
+  const invalidCases = [
+    samplePayment({
+      id: 'allocation-total-mismatch',
+      allocations: [{ user_id: 'member', amount: 9.99 }]
+    }),
+    samplePayment({
+      id: 'allocation-inactive-member',
+      allocations: [{ user_id: 'inactive', amount: 10 }]
+    }),
+    samplePayment({
+      id: 'allocation-duplicate-member',
+      allocations: [
+        { user_id: 'member', amount: 5 },
+        { user_id: 'member', amount: 5 }
+      ]
+    })
+  ];
+
+  for (const payment of invalidCases) {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'rooms', 'room1', 'payments', payment.id), payment);
+    batch.set(doc(collection(db, 'rooms', 'room1', 'activity')), sampleLog({
+      action: 'payment.recorded',
+      entityType: 'canteen_payment',
+      entityId: payment.id,
+      afterData: payment
+    }));
+    await assertFails(batch.commit());
+  }
+});
+
 test('activity logs cannot be fabricated without the matching financial change', async () => {
   const db = env.authenticatedContext('member').firestore();
   const existing = (await getDoc(doc(db, 'rooms', 'room1', 'expenses', 'existing-expense'))).data();
