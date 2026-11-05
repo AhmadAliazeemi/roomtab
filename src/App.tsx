@@ -14,7 +14,7 @@ import {
   setDoc, updateDoc, writeBatch, type DocumentData
 } from 'firebase/firestore';
 import { firebaseAuth, firestore, isFirebaseConfigured } from './lib/firebase';
-import { calculateRoomAccounting, centsToMoney, makeMonthClosingSnapshot, maximumCanteenPayment, moneyToCents, splitEqually, validateCanteenPayment } from './lib/accounting.mjs';
+import { calculateRoomAccounting, centsToMoney, makeMonthClosingSnapshot, maximumCanteenPayment, moneyToCents, splitEqually, validateCanteenPayment, validateExpenseBalanceChange } from './lib/accounting.mjs';
 
 type Room = { id: string; name: string; join_code: string; admin_user_id: string; currency_code: string; track_reimbursements: boolean; require_meal_confirmation?: boolean; default_split_method: 'equal'|'custom'; created_at: string; my_role?: 'admin'|'member' };
 type Member = { id?: string; user_id: string; display_name: string; email?: string; room_id?: string; role: 'admin'|'member'; is_active: boolean; joined_at?: string; left_at?: string|null; join_code?: string };
@@ -222,6 +222,16 @@ export default function App() {
     const confirmationVersion=confirmationRequired?(createConfirmationRound?(before?.confirmation_version||0)+1:before?.confirmation_version||1):0;
     const confirmationRoundId=confirmationRequired?(createConfirmationRound?uid():before?.confirmation_round_id||uid()):null;
     const expense:Expense={id:mealDraft.id||uid(),room_id:room.id,created_by:before?.created_by||currentUserId,description:mealDraft.description.trim()||'Meal',total_amount:normalizedAmount,meal_date:mealDraft.date,month_key:monthStart(mealDraft.date),entry_mode:mealDraft.mode,is_deleted:false,created_at:before?.created_at||now,updated_at:now,shares,confirmation_required:confirmationRequired,confirmation_version:confirmationVersion,confirmation_round_id:confirmationRoundId};
+     try{
+       validateExpenseBalanceChange({
+         roomDebt,
+         previousAmount:before&&!before.is_deleted?before.total_amount:0,
+         nextAmount:expense.total_amount
+       });
+     }catch(error){
+       announce(error instanceof Error?error.message:'This change would make canteen payments exceed recorded food expenses.','error');
+       return;
+     }
     if(demoMode){const logs=[{id:uid(),room_id:room.id,actor_id:currentUserId,action:before?'expense.updated':'expense.created',entity_type:'expense',entity_id:expense.id,before_data:before||null,after_data:expense,created_at:now,detail:before?'Corrected meal expense':'Added meal expense'},...demo.data.logs];setDemo({...demo,data:{...demo.data,expenses:before?demo.data.expenses.map(e=>e.id===before.id?expense:e):[expense,...demo.data.expenses],logs}});setMealDraft(null);announce(before?'Meal expense corrected.':'Meal expense saved.');return;}
     if(!firestore)return;setBusy(true);try{const batch=writeBatch(firestore);const ref=doc(firestore,'rooms',room.id,'expenses',expense.id);batch.set(ref,expense);
       if(confirmationRequired&&createConfirmationRound&&confirmationRoundId){
@@ -239,7 +249,7 @@ export default function App() {
       }
       recordLog(batch,room.id,currentUserId,before?'expense.updated':'expense.created','expense',expense.id,before||null,expense,before?'Corrected meal expense':'Added meal expense');await batch.commit();setMealDraft(null);await refresh();announce(before?'Meal expense corrected.':confirmationRequired?'Meal saved. Participant confirmations are now required.':'Meal expense saved.');}catch(e){announce(e instanceof Error?e.message:'Could not save the meal.','error');}finally{setBusy(false);}
   };
-  const deleteMeal=async(expense:Expense)=>{if(!room||!window.confirm('Mark this meal entry as deleted? It will remain in the activity history.'))return;const now=new Date().toISOString();const next={...expense,is_deleted:true,updated_at:now};if(demoMode){setDemo({...demo,data:{...demo.data,expenses:demo.data.expenses.map(e=>e.id===expense.id?next:e),logs:[{id:uid(),room_id:room.id,actor_id:currentUserId,action:'expense.deleted',entity_type:'expense',entity_id:expense.id,before_data:expense,after_data:next,created_at:now,detail:'Deleted meal expense'},...demo.data.logs]}});announce('Meal marked as deleted.');return;}if(!firestore)return;try{const batch=writeBatch(firestore);batch.update(doc(firestore,'rooms',room.id,'expenses',expense.id),{is_deleted:true,updated_at:now});recordLog(batch,room.id,currentUserId,'expense.deleted','expense',expense.id,expense,next,'Deleted meal expense');await batch.commit();await refresh();announce('Meal marked as deleted.');}catch(e){announce(e instanceof Error?e.message:'Could not delete meal.','error');}};
+  const deleteMeal=async(expense:Expense)=>{if(!room||!window.confirm('Mark this meal entry as deleted? It will remain in the activity history.'))return;try{validateExpenseBalanceChange({roomDebt,previousAmount:expense.total_amount,nextAmount:0});}catch(error){announce(error instanceof Error?error.message:'Correct the canteen payment first.','error');return;}const now=new Date().toISOString();const next={...expense,is_deleted:true,updated_at:now};if(demoMode){setDemo({...demo,data:{...demo.data,expenses:demo.data.expenses.map(e=>e.id===expense.id?next:e),logs:[{id:uid(),room_id:room.id,actor_id:currentUserId,action:'expense.deleted',entity_type:'expense',entity_id:expense.id,before_data:expense,after_data:next,created_at:now,detail:'Deleted meal expense'},...demo.data.logs]}});announce('Meal marked as deleted.');return;}if(!firestore)return;try{const batch=writeBatch(firestore);batch.update(doc(firestore,'rooms',room.id,'expenses',expense.id),{is_deleted:true,updated_at:now});recordLog(batch,room.id,currentUserId,'expense.deleted','expense',expense.id,expense,next,'Deleted meal expense');await batch.commit();await refresh();announce('Meal marked as deleted.');}catch(e){announce(e instanceof Error?e.message:'Could not delete meal.','error');}};
 
   const startPayment=(payment?:Payment)=>setPaymentDraft(payment?{id:payment.id,amount:String(payment.amount),paidBy:payment.paid_by,date:payment.payment_date,note:payment.note||''}:{amount:'',paidBy:currentUserId,date:localDate(),note:''});
   const savePayment=async(event:FormEvent)=>{
